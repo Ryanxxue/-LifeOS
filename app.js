@@ -1136,11 +1136,11 @@ function renderMe() {
     '<div style="flex:1;min-width:0"><div class="rb-t">同步身体数据</div>' +
     '<div class="rb-s">' + (sync ? '今天已有数据' : '今天还没有数据') + '</div></div>' +
     '<div class="chev">' + icon('chev', 15) + '</div></button>' +
-    (coros.connected ? '<button class="rowbtn" data-act="corosDiag">' +
-      '<div class="icbox" style="background:var(--fill-2);color:var(--text)">' + icon('med', 16) + '</div>' +
-      '<div style="flex:1;min-width:0"><div class="rb-t">同步诊断</div>' +
-      '<div class="rb-s">' + (coros.warnCount ? '上次同步有 ' + coros.warnCount + ' 处字段未识别' : '查看 COROS 字段识别情况') + '</div></div>' +
-      '<div class="chev">' + icon('chev', 15) + '</div></button>' : '') +
+    '<button class="rowbtn" data-act="corosDiag">' +
+    '<div class="icbox" style="background:var(--fill-2);color:var(--text)">' + icon('med', 16) + '</div>' +
+    '<div style="flex:1;min-width:0"><div class="rb-t">同步诊断</div>' +
+    '<div class="rb-s">' + (coros.warnCount ? '上次同步有 ' + coros.warnCount + ' 处字段未识别' : '查看上次同步结果与原始返回') + '</div></div>' +
+    '<div class="chev">' + icon('chev', 15) + '</div></button>' +
     '</div>';
 
   html += '<div class="gtitle">外观</div><div class="card">' +
@@ -1509,26 +1509,58 @@ document.addEventListener('click', async function (ev) {
       const st = Coros.status();
       if (!st.connected) { toast('请先连接 COROS'); break; }
       toast('正在同步…');
-      try {
-        const res = await Coros.sync();
-        await loadAll();
-        const w = (res && res.warnings) || [];
-        toast('已同步 ' + ((res && res.days) || 0) + ' 天数据' +
-          (w.length ? '，' + w.length + ' 处字段未识别，请查看同步诊断' : ''));
-        render();
-      } catch (e) { toast('同步失败：' + (e.message || '')); }
+      let res;
+      try { res = await Coros.sync(); }
+      catch (e) {
+        toast(e && e.soft ? e.message
+          : 'COROS 同步失败：' + ((e && e.message) || '未知错误，请查看同步诊断'));
+        break;
+      }
+      // 同步与刷新是两回事：刷新失败不能误报成同步失败
+      try { await loadAll(); render(); }
+      catch (e) { toast('同步完成，但刷新数据失败：' + ((e && e.message) || '')); break; }
+      const w = (res && res.warnings) || [];
+      toast('已同步 ' + ((res && res.days) || 0) + ' 天身体数据、' +
+        ((res && res.activities) || 0) + ' 条运动' +
+        (w.length ? '，' + w.length + ' 处未识别，请查看同步诊断' : ''));
       break;
     }
     case 'corosDiag': {
       const w = (window.Coros && typeof Coros.warnings === 'function') ? Coros.warnings() : [];
-      const body = w.length
-        ? w.map(x => '<div class="note"><div class="ch">' + esc(x.tool || '未知工具') + ' · ' + esc(x.field || '') + '</div>' +
-            '<div class="tx">' + esc(x.reason) + '</div></div>').join('')
-        : '<div class="empty" style="padding:20px 0">上次同步没有未识别字段。</div>';
-      openSheet('<div class="grabber"></div><div class="sheet-h"><div class="t">同步诊断</div>' +
-        '<button data-act="closesheet">关闭</button></div><div class="sheet-body">' +
-        '<div class="gfoot" style="margin:0 4px 12px">COROS 字段按固定结构读取，单位或路径不明确时不会写入，而是记录在这里。共 ' + w.length + ' 条。</div>' +
-        body + '</div>');
+      const diag = (window.Coros && typeof Coros.diagnostics === 'function') ? await Coros.diagnostics() : null;
+      let html = '<div class="grabber"></div><div class="sheet-h"><div class="t">同步诊断</div>' +
+        '<button data-act="closesheet">关闭</button></div><div class="sheet-body">';
+      html += '<div class="gfoot" style="margin:0 4px 12px">' +
+        (diag
+          ? ('上次运行 ' + esc(String(diag.at || '').slice(0, 19).replace('T', ' ')) + ' · ' +
+             (diag.ok ? '成功' : '失败') +
+             (diag.parsed ? ' · ' + diag.parsed.healthDays + ' 天身体数据 / ' + diag.parsed.activities + ' 条运动' : ''))
+          : '还没有同步记录。') + '</div>';
+      if (diag && diag.ok === false && diag.error) {
+        html += '<div class="gtitle">失败原因</div><div class="card" style="padding:14px">' +
+          '<div style="font-size:13px;color:var(--red);line-height:1.6">' + esc(diag.error) + '</div></div>';
+      }
+      if (w.length) {
+        html += '<div class="gtitle">未识别字段（' + w.length + '）</div>' + w.map(x =>
+          '<div class="note"><div class="ch">' + esc(x.tool || '未知工具') + ' · ' + esc(x.field || '') + '</div>' +
+          '<div class="tx">' + esc(x.reason) + '</div></div>').join('');
+      }
+      if (diag && Array.isArray(diag.log) && diag.log.length) {
+        html += '<div class="gtitle">调用日志</div><div class="card">' + diag.log.map(x =>
+          '<div class="lrow" style="cursor:default"><div class="lbody">' +
+          '<div class="lrow-t" style="font-size:12.5px">' + esc(String(x)) + '</div></div></div>').join('') + '</div>';
+      }
+      if (diag && Array.isArray(diag.samples) && diag.samples.length) {
+        html += '<div class="gtitle">原始返回样本</div>' + diag.samples.map(x =>
+          '<div class="note"><div class="ch">' + esc(x.tool || '') + ' · ' + esc(x.kind || '') + '</div>' +
+          '<div class="tx" style="font-size:11.5px;white-space:pre-wrap;word-break:break-all">' +
+          esc(String(x.preview || '')) + '</div></div>').join('');
+      }
+      if (!w.length && !(diag && diag.log && diag.log.length)) {
+        html += '<div class="empty" style="padding:20px 0">上次同步没有未识别字段。</div>';
+      }
+      html += '</div>';
+      openSheet(html);
       break;
     }
 

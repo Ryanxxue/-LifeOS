@@ -251,15 +251,30 @@ async function callTool(token, name, args) {
     params: { name: name, arguments: args || {} }
   }, mcpSession);
   if (r.error) throw new Error(r.error.message || 'MCP 调用失败');
-  const c = r.result && r.result.content;
-  if (Array.isArray(c)) {
-    const txt = c.filter(x => x && x.type === 'text').map(x => x.text).join('\n');
-    if (txt) {
-      try { return JSON.parse(txt); } catch (e) { return txt; }
-    }
-    return c;
+  const result = r.result || {};
+  if (result.structuredContent !== undefined) {
+    return { kind: 'json', value: result.structuredContent,
+      raw: JSON.stringify(result.structuredContent).slice(0, 400) };
   }
-  return r.result;
+  let txt = '';
+  const c = result.content;
+  if (Array.isArray(c)) txt = c.filter(x => x && x.type === 'text').map(x => x.text).join('\n');
+  else if (typeof result === 'string') txt = result;
+  else return { kind: 'json', value: result, raw: JSON.stringify(result).slice(0, 400) };
+
+  const t = txt.trim();
+  // COROS 把整段报告用 JSON.stringify 包了一层，先剥掉字符串字面量外壳
+  if (t.charAt(0) === '"') {
+    try {
+      const parsed = JSON.parse(t);
+      if (typeof parsed === 'string') return { kind: 'text', value: parsed, raw: parsed.slice(0, 400) };
+    } catch (e) {}
+  }
+  try {
+    const j = JSON.parse(t);
+    return { kind: 'json', value: j, raw: t.slice(0, 400) };
+  } catch (e) {}
+  return { kind: 'text', value: txt, raw: txt.slice(0, 400) };
 }
 
 /* ---------- 固定字段 schema ----------
@@ -435,117 +450,288 @@ function mapItem(category, item, toolName, issues) {
   return { row: row, day: day, mapped: mapped };
 }
 
-/* ---------- 同步 ---------- */
-const SLEEP_WORDS = ['sleep', 'sleepdata', 'sleeplog', 'night'];
-const HEALTH_WORDS = ['daily', 'health', 'summary', 'metric', 'recovery', 'load', 'stress', 'hrv'];
-const ACT_WORDS = ['activit', 'workout', 'session', 'exercise', 'training'];
+/* ---------- 同步 ----------
+   COROS 官方 MCP 返回的是给 LLM 阅读的纯文本报告（实测 2026-11），不是结构化 JSON；
+   日期参数为 yyyyMMdd，报告内日期为 yyyy-MM-dd / yyyyMMdd。这里按工具名精确解析，
+   每个字段都做合理区间校验；不认识的内容只记诊断，不写库。 */
+const READ_TOOLS = {
+  queryDailyHealthData: 'daily',
+  querySleepOverview: 'sleepOverview',
+  querySleepHrv: 'hrv',
+  queryRestingHeartRate: 'rhr',
+  queryStressLevel: 'stress',
+  queryTrainingLoadAssessment: 'load',
+  querySportRecords: 'sport'
+};
+const JSON_CATEGORY = {
+  queryDailyHealthData: 'health', querySleepOverview: 'sleep',
+  querySleepHrv: 'health', queryRestingHeartRate: 'health',
+  queryStressLevel: 'health', queryTrainingLoadAssessment: 'health',
+  querySportRecords: 'activity'
+};
+/* 白名单之外的工具绝不调用：create / update / upload / schedule 会改用户 COROS 数据 */
 
-function hit(name, words) {
-  const n = String(name).toLowerCase();
-  return words.some(w => n.indexOf(w) !== -1);
+function num(s) {
+  if (s === null || s === undefined || s === '') return null;
+  const n = Number(String(s).replace(/,/g, '').trim());
+  return isFinite(n) ? n : null;
+}
+function minutesOf(s) {
+  if (s === null || s === undefined) return null;
+  const str = String(s);
+  const h = /(\d+(?:\.\d+)?)\s*h(?:our)?s?/i.exec(str);
+  const m = /(\d+(?:\.\d+)?)\s*min/i.exec(str);
+  if (!h && !m) return num(str);
+  return (h ? Number(h[1]) * 60 : 0) + (m ? Number(m[1]) : 0);
+}
+function clockSeconds(s) {
+  if (!s) return null;
+  const parts = String(s).trim().split(':').map(Number);
+  if (!parts.length || parts.some(x => !isFinite(x))) return null;
+  let sec = 0;
+  for (const x of parts) sec = sec * 60 + x;
+  return sec;
+}
+function isoDay(s) {
+  const t = String(s || '').trim();
+  const m = /^(\d{4})-?(\d{2})-?(\d{2})$/.exec(t);
+  return m ? m[1] + '-' + m[2] + '-' + m[3] : null;
+}
+function compactDay(s) { return String(s).replace(/-/g, ''); }
+function hours(min) { return Math.round(min / 6) / 10; }
+function inRange(v, lo, hi) { return v !== null && isFinite(v) && v >= lo && v <= hi; }
+function grab(re, text) { const m = re.exec(text); return m ? m[1] : null; }
+
+function parseDailyHealth(text, issues) {
+  const out = [];
+  const re = /---\s*(\d{8})\s*---/g;
+  const marks = []; let m;
+  while ((m = re.exec(text))) marks.push({ day: isoDay(m[1]), start: re.lastIndex, len: m[0].length, head: m[0] });
+  for (let i = 0; i < marks.length; i++) {
+    const stop = i + 1 < marks.length ? marks[i + 1].start - marks[i + 1].head.length : text.length;
+    const block = text.slice(marks[i].start, stop);
+    const row = {};
+    const steps = num(grab(/Steps:\s*([\d,]+)/, block));
+    if (inRange(steps, 0, 100000)) row.steps = Math.round(steps);
+    const stress = num(grab(/Stress:\s*Avg\s*([\d,]+)/, block));
+    if (inRange(stress, 0, 100)) row.stress = Math.round(stress);
+    const total = minutesOf(grab(/\bTotal:\s*([^|\n]+)/i, block));
+    if (inRange(total, 120, 840)) row.sleep_total = hours(total);
+    const deep = minutesOf(grab(/\bDeep:\s*([^|\n]+)/i, block));
+    if (inRange(deep, 0, 840)) row.sleep_deep = hours(deep);
+    const light = minutesOf(grab(/\bLight:\s*([^|\n]+)/i, block));
+    if (inRange(light, 0, 840)) row.sleep_light = hours(light);
+    const rem = minutesOf(grab(/\bREM:\s*([^|\n]+)/i, block));
+    if (inRange(rem, 0, 840)) row.sleep_rem = hours(rem);
+    if (Object.keys(row).length) out.push({ day: marks[i].day, row: row });
+    else issues.add('queryDailyHealthData', '(整条)', '该日报告没有可识别字段', marks[i].day);
+  }
+  return out;
 }
 
-function argsFor(tool, from, to) {
-  const sc = (tool.inputSchema && tool.inputSchema.properties) || {};
-  const keys = Object.keys(sc);
-  const a = {};
-  let hasDate = false;
-  keys.forEach(k => {
-    const kl = k.toLowerCase();
-    if (/^(start|from|begin)(_?(date|day|time))?$/.test(kl)) { a[k] = from; hasDate = true; }
-    else if (/^(end|to|until)(_?(date|day|time))?$/.test(kl)) { a[k] = to; hasDate = true; }
-    else if (/^(date|day)$/.test(kl)) { a[k] = to; hasDate = true; }
-    else if (/(days|limit|count)/.test(kl) && sc[k] && sc[k].type === 'number') { a[k] = 7; }
+function parseSleepOverview(text) {
+  const out = [];
+  for (const b of String(text).split(/\n\s*\n/)) {
+    const dm = /^\s*(\d{4}-\d{2}-\d{2})\s*$/m.exec(b);
+    if (!dm) continue;
+    const main = minutesOf(grab(/Main Sleep \(asleep\):\s*([^\n]+)/, b));
+    const daily = minutesOf(grab(/Daily Sleep:\s*([^\n]+)/, b));
+    const total = inRange(main, 120, 840) ? main : (inRange(daily, 120, 840) ? daily : null);
+    if (total === null) continue;
+    const row = { sleep_total: hours(total) };
+    [['sleep_deep', /Deep Sleep Ratio:\s*(\d+)\s*%/i],
+     ['sleep_light', /Light Sleep Ratio:\s*(\d+)\s*%/i],
+     ['sleep_rem', /REM Ratio:\s*(\d+)\s*%/i]].forEach(function (d) {
+      const p = num(grab(d[1], b));
+      if (inRange(p, 0, 100)) row[d[0]] = hours(total * p / 100);
+    });
+    out.push({ day: dm[1], row: row });
+  }
+  return out;
+}
+
+function parseDailyPairs(text, re, key, lo, hi) {
+  const out = []; let m;
+  const rx = new RegExp(re.source, re.flags.indexOf('g') >= 0 ? re.flags : re.flags + 'g');
+  while ((m = rx.exec(String(text)))) {
+    const day = isoDay(m[1]), v = num(m[2]);
+    if (day && inRange(v, lo, hi)) out.push({ day: day, row: (function () { const r = {}; r[key] = Math.round(v); return r; })() });
+  }
+  return out;
+}
+function parseHrv(text) {
+  const seg = String(text).split(/Sleep HRV Time Series/i)[0];
+  return parseDailyPairs(seg, /(\d{4}-\d{2}-\d{2}):\s*\n\s*HRV Avg:\s*(\d+(?:\.\d+)?)\s*ms/i, 'hrv', 1, 300);
+}
+function parseRestingHr(text) {
+  return parseDailyPairs(text, /(\d{4}-\d{2}-\d{2}):\s*(\d+)\s*bpm/i, 'resting_hr', 25, 120);
+}
+function parseStress(text) {
+  return parseDailyPairs(text, /(\d{4}-\d{2}-\d{2}):\s*\n\s*Average Stress:\s*(\d+)/i, 'stress', 0, 100);
+}
+function parseLoad(text) {
+  const out = [];
+  for (const b of String(text).split(/\n\s*\n/)) {
+    const dm = /^\s*(\d{4}-\d{2}-\d{2})\s*$/m.exec(b);
+    const v = num(grab(/Short-Term Load:\s*(\d+)/, b));
+    if (dm && inRange(v, 0, 1000)) out.push({ day: isoDay(dm[1]), row: { training_load: Math.round(v) } });
+  }
+  return out;
+}
+function parseSportRecords(text) {
+  const out = [];
+  const re = /^\s*\d+\.\s*(.+?)\s+—\s+(\d{4}-\d{2}-\d{2})\s*$/gm;
+  const marks = []; let m;
+  while ((m = re.exec(text))) marks.push({ name: m[1].trim(), day: m[2], start: re.lastIndex });
+  for (let i = 0; i < marks.length; i++) {
+    const b = text.slice(marks[i].start, i + 1 < marks.length ? marks[i + 1].start : text.length);
+    const ext = grab(/LabelId:\s*(\S+)/, b);
+    const row = {
+      external_id: ext || (marks[i].day + '|' + marks[i].name),
+      day: marks[i].day,
+      name: marks[i].name,
+      type: grab(/SportType:\s*(\S+)/, b) || null
+    };
+    const dur = clockSeconds(grab(/Duration:\s*([^\s|]+)/, b));
+    if (inRange(dur, 60, 86400)) row.duration_sec = Math.round(dur);
+    const km = num(grab(/Distance:\s*([\d.,]+)\s*km/i, b));
+    if (inRange(km, 0, 1000)) row.distance_m = Math.round(km * 1000);
+    const hr = num(grab(/Avg HR:\s*(\d+)\s*bpm/i, b));
+    if (inRange(hr, 25, 250)) row.avg_hr = Math.round(hr);
+    const kcal = num(grab(/Calories:\s*([\d,]+)\s*kcal/i, b));
+    if (inRange(kcal, 0, 20000)) row.calories = Math.round(kcal);
+    out.push(row);
+  }
+  return out;
+}
+
+function mergeHealth(map, entries, fillOnly) {
+  entries.forEach(function (e) {
+    if (!e.day) return;
+    const cur = map[e.day] = map[e.day] || {};
+    Object.keys(e.row).forEach(function (k) {
+      if (!fillOnly || cur[k] === undefined) cur[k] = e.row[k];
+    });
   });
-  if (!hasDate && sc['date']) a['date'] = to;
-  return a;
 }
 
 async function sync(days) {
-  if (busy) throw new Error('正在同步，请稍候');
+  if (busy) { const soft = new Error('已有同步在进行，请稍候'); soft.soft = true; throw soft; }
   busy = true;
-  const n = Math.max(1, Math.min(14, days || 3));
+  const n = Math.max(1, Math.min(14, days || 7));
+  let phase = '准备';
+  const debug = [], issues = issueBucket(), samples = [], toolsUsed = [];
+  const health = {}, activities = [];
   try {
+    phase = '检查授权';
     const a = await ensureFresh();
     const token = a.access_token;
+    phase = '连接 COROS';
     await mcpInit(token);
+    phase = '读取工具列表';
     const tools = await listTools(token);
     if (!tools.length) throw new Error('没有获取到可用的数据接口');
 
     const from = ymd(new Date(Date.now() - (n - 1) * 86400000));
     const to = ymd(new Date());
+    const wanted = {};
+    tools.forEach(function (t) { if (t && READ_TOOLS[t.name]) wanted[t.name] = t; });
 
-    const written = new Set();
-    const issues = issueBucket();
-    const debug = [];
-    const samples = [];
-
-    for (const t of tools) {
-      const nm = t.name || '';
-      const category = hit(nm, SLEEP_WORDS) ? 'sleep'
-        : hit(nm, ACT_WORDS) ? 'activity'
-        : hit(nm, HEALTH_WORDS) ? 'health' : null;
-      if (!category) { debug.push(nm + ': 非数据类工具，跳过'); continue; }
-
-      let payload;
-      try {
-        payload = await callTool(token, nm, argsFor(t, from, to));
-      } catch (e) {
+    for (const nm of Object.keys(READ_TOOLS)) {
+      const t = wanted[nm];
+      if (!t) { debug.push(nm + ': 官方未提供，跳过'); continue; }
+      const allowed = Object.keys((t.inputSchema && t.inputSchema.properties) || {});
+      const cand = { days: n, startDate: compactDay(from), endDate: compactDay(to), limit: 50 };
+      const args = {};
+      allowed.forEach(function (k) { if (cand[k] !== undefined) args[k] = cand[k]; });
+      phase = '读取 ' + nm;
+      let res;
+      try { res = await callTool(token, nm, args); }
+      catch (e) {
         const msg = e.message || 'fail';
-        debug.push(nm + ': ' + msg);
-        issues.add(nm, '(整条)', '调用失败：' + msg, '');
+        debug.push(nm + ': 调用失败 ' + msg);
+        issues.add(nm, '(整条)', '调用失败：' + msg, JSON.stringify(args));
+        continue;
+      }
+      toolsUsed.push(nm);
+      samples.push({ tool: nm, kind: res.kind, args: args, preview: String(res.raw || '').slice(0, 400) });
+
+      if (res.kind === 'json') {
+        // 兼容：若官方改回结构化返回，仍走固定 schema 白名单
+        const category = JSON_CATEGORY[nm] || 'health';
+        const v = res.value;
+        const arr = Array.isArray(v) ? v
+          : (v && (Array.isArray(v.data) ? v.data : Array.isArray(v.items) ? v.items : Array.isArray(v.list) ? v.list : [v]));
+        let cnt = 0;
+        for (const item of arr) {
+          if (!item || typeof item !== 'object') continue;
+          const mm = mapItem(category, item, nm, issues);
+          if (!mm) continue;
+          const day = mm.day || to;
+          if (category === 'activity') {
+            activities.push(Object.assign({
+              external_id: String(item.id || item.activityId || item.labelId || (day + '|' + cnt)),
+              day: day, name: item.name || item.title || null, type: item.type || item.sportType || null
+            }, mm.row));
+          } else mergeHealth(health, [{ day: day, row: mm.row }], false);
+          cnt++;
+        }
+        debug.push(nm + ': JSON 路径 ' + cnt + ' 条');
         continue;
       }
 
-      const buckets = Array.isArray(payload) ? payload
-        : (payload && Array.isArray(payload.data) ? payload.data
-        : (payload && Array.isArray(payload.items) ? payload.items
-        : (payload && Array.isArray(payload.list) ? payload.list : [payload])));
-
-      let okCount = 0;
-      for (const item of buckets) {
-        if (!item || typeof item !== 'object') continue;
-        if (samples.length < 12) samples.push({ tool: nm, keys: Object.keys(item).slice(0, 30) });
-        const m = mapItem(category, item, nm, issues);
-        if (!m) continue;
-        const day = m.day || to;
-
-        if (category === 'activity') {
-          const ext = String(item.id || item.activityId || item.activity_id || item.labelId || item.workoutId ||
-            (day + '|' + (item.type || '') + '|' + (m.row.duration_sec || '') + '|' + (m.row.distance_m || '')));
-          await window.LifeApp.upsertActivity({
-            external_id: ext,
-            day: day,
-            type: item.type || item.sportType || item.mode || null,
-            name: item.name || item.title || item.sportName || null,
-            duration_sec: m.row.duration_sec === undefined ? null : m.row.duration_sec,
-            distance_m: m.row.distance_m === undefined ? null : m.row.distance_m,
-            avg_hr: m.row.avg_hr === undefined ? null : m.row.avg_hr,
-            calories: m.row.calories === undefined ? null : m.row.calories
-          });
-        } else {
-          await window.LifeApp.upsertHealth(day, m.row);
-          written.add(day);
-        }
-        okCount++;
+      const text = String(res.value || '');
+      if (/must not be blank|must be in yyyyMMdd|anomalies detected|High risk of session/i.test(text)) {
+        debug.push(nm + ': 参数被拒 ' + text.slice(0, 120));
+        issues.add(nm, '(整条)', '参数被官方拒绝：' + text.slice(0, 160), JSON.stringify(args));
+        continue;
       }
-      debug.push(nm + ': ' + okCount + '/' + buckets.length + ' 条写入');
+      let entries = [], acts = [], fill = false;
+      switch (READ_TOOLS[nm]) {
+        case 'daily':        entries = parseDailyHealth(text, issues); break;
+        case 'sleepOverview':entries = parseSleepOverview(text); fill = true; break;
+        case 'hrv':          entries = parseHrv(text); break;
+        case 'rhr':          entries = parseRestingHr(text); break;
+        case 'stress':       entries = parseStress(text); break;
+        case 'load':         entries = parseLoad(text); break;
+        case 'sport':        acts = parseSportRecords(text); break;
+      }
+      mergeHealth(health, entries, fill);
+      acts.forEach(function (r) { activities.push(r); });
+      debug.push(nm + ': 解析出 ' + (entries.length || acts.length) + ' 条');
     }
 
-    // 同步结果 + 未识别字段落库；诊断页与 toast 都会把它报给用户
-    cache.last_sync = new Date().toISOString();
+    phase = '写入云端';
+    const written = new Set();
+    for (const day of Object.keys(health)) {
+      await window.LifeApp.upsertHealth(day, Object.assign({ source: 'coros' }, health[day]));
+      written.add(day);
+    }
+    for (const row of activities) await window.LifeApp.upsertActivity(row);
+    debug.push('写入 ' + written.size + ' 天身体数据 / ' + activities.length + ' 条运动');
+
+    phase = '保存诊断';
     const warnings = issues.list();
+    cache.last_sync = new Date().toISOString();
     cache.last_warnings = warnings;
     await window.LifeApp.saveKv(KV_KEY, cache);
+    await window.LifeApp.saveKv('coros_last_run', {
+      at: cache.last_sync, ok: true, phase: '完成', tools: toolsUsed,
+      log: debug, warnings: warnings, samples: samples,
+      parsed: { healthDays: written.size, activities: activities.length, days: Object.keys(health) }
+    });
+    return { days: written.size, activities: activities.length, warnings: warnings, tools: toolsUsed.length };
+  } catch (e) {
+    const msg = '[' + phase + '] ' + (e.message || '未知错误');
     try {
       await window.LifeApp.saveKv('coros_last_run', {
-        at: cache.last_sync, tools: tools.map(t => t.name),
-        log: debug, warnings: warnings, samples: samples,
-        schemaFields: Object.keys(SCHEMAS).reduce((o, k) => { o[k] = SCHEMAS[k].fields.map(f => f.key); return o; }, {})
+        at: new Date().toISOString(), ok: false, phase: phase, error: msg,
+        log: debug, samples: samples, warnings: issues.list()
       });
-    } catch (e) {}
-
-    return { days: written.size, warnings: warnings, tools: tools.length };
+    } catch (x) {}
+    const wrapped = new Error(msg);
+    wrapped.soft = !!e.soft;
+    throw wrapped;
   } finally {
     busy = false;
   }
@@ -579,5 +765,17 @@ async function afterLogin() {
   } catch (e) { console.warn('[coros] auto sync skipped:', e.message); }
 }
 
-window.Coros = { connect, handleCallback, sync, status, warnings, afterLogin, mapItem, issueBucket, SCHEMAS };
+async function diagnostics() {
+  try { return await window.LifeApp.getKv('coros_last_run'); } catch (e) { return null; }
+}
+
+window.Coros = {
+  connect: connect, handleCallback: handleCallback, sync: sync, status: status,
+  warnings: warnings, diagnostics: diagnostics, afterLogin: afterLogin,
+  mapItem: mapItem, issueBucket: issueBucket, SCHEMAS: SCHEMAS, READ_TOOLS: READ_TOOLS,
+  parseDailyHealth: parseDailyHealth, parseSleepOverview: parseSleepOverview,
+  parseHrv: parseHrv, parseRestingHr: parseRestingHr, parseStress: parseStress,
+  parseLoad: parseLoad, parseSportRecords: parseSportRecords,
+  minutesOf: minutesOf, clockSeconds: clockSeconds
+};
 })();

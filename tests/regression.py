@@ -283,6 +283,54 @@ TEST = r'''
     ok('P1-6 活动字段与距离单位白名单', !!m && m.row.duration_sec === 1800 && m.row.distance_m === 5200,
        m && JSON.stringify(m.row) + ' issues=' + b.list().length);
 
+    /* --- COROS 文本报告解析（官方 MCP 实测格式，2026-11） --- */
+    const ci = C.issueBucket();
+    const dh = C.parseDailyHealth([
+      'Daily Health Data — Last 7 days',
+      '--- 20261102 ---',
+      'Steps: 5,859 | Calories: 264 kcal | Exercise: 7 min',
+      'Stress: Avg 33',
+      'Sleep Summary:',
+      '  Total: 7h 45min | Deep: 52 min | Light: 4h 53min | REM: 1h 51min | Awake: 9 min',
+      '',
+      '--- 20261108 ---',
+      'Steps: 13,299 | Calories: 649 kcal',
+      'Stress: Avg 58'
+    ].join('\n'), ci);
+    ok('COROS 文本：每日健康解析睡眠/步数/压力',
+       dh.length === 2 && dh[0].row.sleep_total === 7.8 && dh[0].row.sleep_deep === 0.9 &&
+       dh[0].row.steps === 5859 && dh[0].row.stress === 33 && dh[1].row.sleep_total === undefined,
+       JSON.stringify(dh));
+    ok('COROS 文本：HRV 只取评估段、不串入时间序列',
+       C.parseHrv('HRV Assessment\n2026-11-06:\n  HRV Avg: 91 ms — Normal\n' +
+                  'Sleep HRV Time Series\n2026-11-02:\n  hrv=124 ms').length === 1);
+    ok('COROS 文本：静息心率跳过 No data',
+       C.parseRestingHr('Resting Heart Rate\n2026-11-08: No data\n2026-11-06: 52 bpm').length === 1 &&
+       C.parseRestingHr('Resting Heart Rate\n2026-11-08: No data\n2026-11-06: 52 bpm')[0].row.resting_hr === 52);
+    ok('COROS 文本：压力与训练负荷按日期解析',
+       C.parseStress('Stress Level\n2026-11-08:\nAverage Stress: 58')[0].row.stress === 58 &&
+       C.parseLoad('Training Load\n2026-11-08\nComment: Optimized\nShort-Term Load: 45')[0].row.training_load === 45);
+    const sp = C.parseSportRecords([
+      'Sport Records — 2026-11-02 to 2026-11-08 (2 records)',
+      '',
+      '1. Indoor Run — 2026-11-08',
+      '   Duration: 44:59 | Distance: 10.01 km',
+      '   Avg HR: 173 bpm | Calories: 531 kcal',
+      '   LabelId: 481605761542160886 | SportType: 101'
+    ].join('\n'));
+    ok('COROS 文本：运动记录时长/距离/去重键',
+       sp.length === 1 && sp[0].duration_sec === 2699 && sp[0].distance_m === 10010 &&
+       sp[0].avg_hr === 173 && sp[0].external_id === '481605761542160886', JSON.stringify(sp));
+    const ov = C.parseSleepOverview('Sleep Overview\n\n2026-11-02\nDaily Sleep: 7h 36min (incl. naps)\n' +
+      'Main Sleep (asleep): 7h 36min\nDeep Sleep Ratio: 11%\nREM Ratio: 24%');
+    ok('COROS 文本：睡眠概览分期比例', ov.length === 1 && ov[0].row.sleep_deep === 0.8 &&
+       ov[0].row.sleep_rem === 1.8, JSON.stringify(ov));
+    ok('COROS 只读白名单排除写操作工具',
+       Object.keys(C.READ_TOOLS).length === 7 &&
+       Object.keys(C.READ_TOOLS).every(n => !/^(create|update|upload|schedule|delete|download)/i.test(n)) &&
+       !C.READ_TOOLS.createScheduledWorkout && !C.READ_TOOLS.uploadRouteFile);
+    ok('COROS 诊断接口可用', typeof C.diagnostics === 'function');
+
     /* --- P2-1 PWA manifest 与图标内联 --- */
     const mfLink = q1('link[rel=manifest]');
     let mf = null;
