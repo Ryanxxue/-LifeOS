@@ -703,12 +703,32 @@ async function sync(days) {
 
     phase = '写入云端';
     const written = new Set();
+    const writeErrors = [];
+    // 单日/单条写入失败不应让整轮同步归零；记录诊断后继续写其余数据。
     for (const day of Object.keys(health)) {
-      await window.LifeApp.upsertHealth(day, Object.assign({ source: 'coros' }, health[day]));
-      written.add(day);
+      try {
+        await window.LifeApp.upsertHealth(day, Object.assign({ source: 'coros' }, health[day]));
+        written.add(day);
+      } catch (e) {
+        const why = String((e && e.message) || e);
+        writeErrors.push(day + '：' + why);
+        debug.push(day + ': 写入失败 ' + why);
+        issues.add('写入云端', day, '写入失败：' + why, null);
+      }
     }
-    for (const row of activities) await window.LifeApp.upsertActivity(row);
-    debug.push('写入 ' + written.size + ' 天身体数据 / ' + activities.length + ' 条运动');
+    for (const row of activities) {
+      try { await window.LifeApp.upsertActivity(row); }
+      catch (e) {
+        const why = String((e && e.message) || e);
+        writeErrors.push('运动 ' + row.external_id + '：' + why);
+        issues.add('写入云端', 'activity', '写入失败：' + why, null);
+      }
+    }
+    if (Object.keys(health).length && !written.size) {
+      throw new Error('全部日期写入失败：' + (writeErrors[0] || '未知原因'));
+    }
+    debug.push('写入 ' + written.size + ' 天身体数据 / ' + activities.length + ' 条运动' +
+      (writeErrors.length ? '，其中 ' + writeErrors.length + ' 项失败' : ''));
 
     phase = '保存诊断';
     const warnings = issues.list();

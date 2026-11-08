@@ -91,6 +91,13 @@ MOCK = r'''
         if (t === 'notes' && store[t].some(x => String(x.book_id) === String(r.book_id) && x.content === r.content)) {
           throw new Error('duplicate key value violates unique constraint 23505 notes_dedupe_idx');
         }
+        // 复现线上真实约束：health_daily(owner_id, day) / activities(owner_id, external_id)
+        if (t === 'health_daily' && store[t].some(x => String(x.day).slice(0, 10) === String(r.day).slice(0, 10))) {
+          throw new Error('duplicate key value violates unique constraint "health_daily_owner_id_day_key"');
+        }
+        if (t === 'activities' && store[t].some(x => String(x.external_id) === String(r.external_id))) {
+          throw new Error('duplicate key value violates unique constraint "activities_owner_id_external_id_key"');
+        }
         store[t].push(r);
         out.push(clone(r));
       }
@@ -395,6 +402,50 @@ TEST = r'''
     let rejected = false;
     try { await window.LifeApp.restoreBackup({ foo: 1 }); } catch (e) { rejected = true; }
     ok('P2-4 非备份文件被拒绝', rejected);
+
+    /* --- COROS 重复同步：复现真实 DB 把 date 列返回成 ISO 串 + 唯一约束 --- */
+    const dupDay = dayAt(-1);
+    store.health_daily.forEach(r => {
+      if (String(r.day).length === 10) r.day = new Date(r.day + 'T00:00:00Z').toISOString();
+    });
+    // 清掉内存里的 id，强制走「回查数据库」路径（真实故障就发生在这一步）
+    if (window.LifeApp.S.health[dupDay]) delete window.LifeApp.S.health[dupDay].id;
+    // 基线：证明本 mock 确实复现了线上差异（旧写法 eq(day, ymd) 对 ISO 日期查不到行）
+    const legacy = await window.WorkBuddyCloud.createWorkBuddyCloud().database
+      .from('health_daily').select('id').eq('day', dupDay).limit(1);
+    ok('回归基线：旧 eq(day) 在 ISO 日期下确实查不到',
+       !(legacy && legacy.data && legacy.data.length), 'rows=' + ((legacy && legacy.data) || []).length);
+    const beforeRows = store.health_daily.length;
+    let dupErr = null;
+    try {
+      await window.LifeApp.upsertHealth(dupDay, { sleep_total: 7.8, hrv: 92, source: 'coros' });
+      await window.LifeApp.upsertHealth(dupDay, { sleep_total: 8.1, hrv: 95, source: 'coros' });
+    } catch (e) { dupErr = String((e && e.message) || e); }
+    const hr = store.health_daily.find(r => String(r.day).slice(0, 10) === dupDay);
+    ok('COROS 重复同步同一天不报唯一键冲突', dupErr === null, dupErr || '两次 upsert 均成功');
+    ok('COROS 重复同步走 UPDATE 且不新增行',
+       store.health_daily.length === beforeRows && hr && Number(hr.sleep_total) === 8.1,
+       'rows=' + store.health_daily.length + ' sleep=' + (hr && hr.sleep_total));
+
+    const freshDay = dayAt(-9);
+    let freshErr = null;
+    try { await window.LifeApp.upsertHealth(freshDay, { sleep_total: 7.2, source: 'coros' }); }
+    catch (e) { freshErr = String((e && e.message) || e); }
+    ok('COROS 新日期首次写入正常', freshErr === null &&
+       store.health_daily.some(r => String(r.day).slice(0, 10) === freshDay), freshErr || '');
+
+    const sport = { external_id: 'coros-test-1', day: dupDay, name: 'Indoor Run',
+                    duration_sec: 2699, distance_m: 10010 };
+    let actErr = null;
+    try {
+      await window.LifeApp.upsertActivity(sport);
+      await window.LifeApp.upsertActivity(Object.assign({}, sport, { duration_sec: 2700 }));
+    } catch (e) { actErr = String((e && e.message) || e); }
+    const acts = store.activities.filter(r => String(r.external_id) === 'coros-test-1');
+    ok('COROS 重复同步同一条运动不报唯一键冲突', actErr === null, actErr || '两次 upsert 均成功');
+    ok('COROS 运动重复写入只保留 1 行且值更新',
+       acts.length === 1 && Number(acts[0].duration_sec) === 2700,
+       'rows=' + acts.length + ' dur=' + (acts[0] && acts[0].duration_sec));
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
   }

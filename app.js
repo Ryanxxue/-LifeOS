@@ -403,27 +403,72 @@ async function logStudy(planId) {
   return true;
 }
 
+/* 幂等写入：DB 的 day 是 date 列，经 SDK 返回 ISO 串（2026-11-08T00:00:00Z），
+   用 .eq('day','2026-11-08') 查不到已有行，重复同步会 INSERT 撞 (owner_id, day) 唯一键。
+   因此优先用 loadAll 已读入内存的 id；没有则无条件拉表、在 JS 侧按前 10 位匹配；
+   INSERT 仍撞唯一键时再查一次改 UPDATE，绝不因重复同步中断整轮。 */
+function isDupError(e) {
+  const s = String((e && (e.message || e.details || e.hint)) || e || '').toLowerCase();
+  return s.indexOf('duplicate') >= 0 || s.indexOf('unique constraint') >= 0 || s.indexOf('23505') >= 0;
+}
+async function findRowId(table, col, val, len) {
+  const rows = await q(DB.from(table).select('id,' + col));
+  const hit = (rows || []).find(r => String(r[col]).slice(0, len || 10) === val);
+  return hit ? dbId(hit.id) : null;
+}
+async function patchById(table, id, payload) {
+  await q(DB.from(table).update(payload).eq('id', id).select());
+}
+
 async function upsertHealth(day, patch) {
   const clean = {};
   Object.keys(patch || {}).forEach(k => { if (patch[k] !== null && patch[k] !== undefined) clean[k] = patch[k]; });
   if (!Object.keys(clean).length) return;
-  const rows = await q(DB.from('health_daily').select('id').eq('day', day).limit(1));
-  if (rows && rows[0]) {
-    await q(DB.from('health_daily').update(Object.assign(clean, { updated_at: new Date().toISOString() })).eq('id', rows[0].id).select());
+  const cur = S.health[day];
+  let id = cur && cur.id !== null && cur.id !== undefined ? dbId(cur.id) : null;
+  if (id === null) id = await findRowId('health_daily', 'day', day, 10);
+  const payload = Object.assign({}, clean, { updated_at: new Date().toISOString() });
+  if (id !== null) {
+    await patchById('health_daily', id, payload);
   } else {
-    await q(DB.from('health_daily').insert(Object.assign({ day: day }, clean)).select());
+    try {
+      const rows = await q(DB.from('health_daily').insert(Object.assign({ day: day }, clean)).select());
+      if (rows && rows[0]) id = dbId(rows[0].id);
+    } catch (e) {
+      if (!isDupError(e)) throw e;
+      const again = await findRowId('health_daily', 'day', day, 10);
+      if (again !== null) { id = again; await patchById('health_daily', id, payload); }
+      else await q(DB.from('health_daily').update(payload).eq('day', day).select());
+    }
   }
-  S.health[day] = Object.assign(S.health[day] || { day: day }, clean);
+  S.health[day] = Object.assign(S.health[day] || { day: day }, clean, id !== null ? { id: String(id) } : {});
 }
 
 async function upsertActivity(row) {
   if (!row || !row.external_id) return;
-  const rows = await q(DB.from('activities').select('id').eq('external_id', row.external_id).limit(1));
-  if (rows && rows[0]) {
-    await q(DB.from('activities').update(row).eq('id', rows[0].id).select());
-  } else {
-    await q(DB.from('activities').insert(row).select());
-    S.activities.push(row);
+  const ext = String(row.external_id);
+  let cur = (S.activities || []).find(a => String(a.external_id) === ext);
+  let id = cur && cur.id !== null && cur.id !== undefined ? dbId(cur.id) : null;
+  if (id === null) {
+    const rows = await q(DB.from('activities').select('id,external_id'));
+    const hit = (rows || []).find(r => String(r.external_id) === ext);
+    if (hit) id = dbId(hit.id);
+  }
+  if (id !== null) {
+    await patchById('activities', id, row);
+    if (cur) Object.assign(cur, row);
+    return;
+  }
+  try {
+    const rows = await q(DB.from('activities').insert(row).select());
+    const saved = rows && rows[0] ? normRow(rows[0]) : null;
+    if (saved) S.activities.push(saved);
+  } catch (e) {
+    if (!isDupError(e)) throw e;
+    const rows = await q(DB.from('activities').select('id,external_id'));
+    const hit = (rows || []).find(r => String(r.external_id) === ext);
+    if (hit) { const rid = dbId(hit.id); await patchById('activities', rid, row); S.activities.push(normRow(Object.assign({ id: rid }, row))); }
+    else await q(DB.from('activities').update(row).eq('external_id', ext).select());
   }
 }
 
