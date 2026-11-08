@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<script>try{var t=localStorage.getItem('lifeboard.theme');document.documentElement.dataset.theme=t||'dark';}catch(e){document.documentElement.dataset.theme='dark';}</script>
+<title>生活记录</title>
+<style>
+:root{
+  --bg:#000000; --card:#1C1C1E; --card-2:#2C2C2E;
+  --fill:rgba(120,120,128,.20); --fill-2:rgba(120,120,128,.34); --fill-3:rgba(120,120,128,.50);
+  --sep:rgba(84,84,88,.55);
+  --text:#FFFFFF; --text-2:rgba(235,235,245,.60); --text-3:rgba(235,235,245,.32);
+  --blue:#0A84FF; --green:#30D158; --red:#FF453A; --orange:#FF9F0A;
+  --indigo:#5E5CE6; --pink:#FF375F; --teal:#40C8E0; --purple:#BF5AF2;
+  --bar:rgba(20,20,22,.80); --side:#141416; --toast:rgba(58,58,60,.96);
+  --blue-soft:rgba(10,132,255,.18); --red-soft:rgba(255,69,58,.16);
+  --heat-1:rgba(10,132,255,.24); --heat-1t:#8DC5FF;
+  --heat-2:rgba(10,132,255,.46); --heat-3:rgba(10,132,255,.72);
+  --cover-ring:rgba(255,255,255,.10);
+  --seg-shadow:0 1px 3px rgba(0,0,0,.55);
+  --sheet:#1C1C1E; --card-sheet:#2C2C2E; --seg-thumb:#636366;
+  --r:12px;
+}
+html[data-theme="light"]{
+  --bg:#F2F2F7; --card:#FFFFFF; --card-2:#F7F7F9;
+  --fill:rgba(120,120,128,.10); --fill-2:rgba(120,120,128,.18); --fill-3:rgba(120,120,128,.28);
+  --sep:rgba(60,60,67,.12);
+  --text:#000000; --text-2:rgba(60,60,67,.60); --text-3:rgba(60,60,67,.30);
+  --blue:#007AFF; --green:#34C759; --red:#FF3B30; --orange:#FF9F0A;
+  --indigo:#5E5CE6; --pink:#FF375F; --teal:#30B0C7; --purple:#AF52DE;
+  --bar:rgba(249,249,249,.86); --side:rgba(255,255,255,.55); --toast:rgba(28,28,30,.92);
+  --blue-soft:rgba(0,122,255,.10); --red-soft:rgba(255,59,48,.10);
+  --heat-1:rgba(0,122,255,.16); --heat-1t:#0A5FBF;
+  --heat-2:rgba(0,122,255,.34); --heat-3:rgba(0,122,255,.64);
+  --cover-ring:rgba(0,0,0,.06);
+  --seg-shadow:0 1px 3px rgba(0,0,0,.10);
+  --sheet:#F2F2F7; --card-sheet:#FFFFFF; --seg-thumb:#FFFFFF;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","PingFang SC","Helvetica Neue","Microsoft YaHei",sans-serif;
+  font-size:15px; line-height:1.45; -webkit-font-smoothing:antialiased;
+  overscroll-behavior-y:none;
+}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;padding:0;text-align:left}
+input,textarea,select{font:inherit;color:inherit;font-family:inherit}
+svg{display:block}
+.ico{width:20px;height:20px;stroke:currentColor;stroke-width:1.9;fill:none;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* ---------------- shell ---------------- */
+.app{display:flex;min-height:100vh;min-height:100dvh}
+.sidebar{display:none;width:232px;flex:none;padding:calc(18px + env(safe-area-inset-top)) 12px 18px;
+  border-right:.5px solid var(--sep);flex-direction:column;gap:2px;position:sticky;top:0;height:100vh;
+  background:var(--side)}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 10px 20px}
+.brand-mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(160deg,var(--blue),#0B5FD0);
+  display:grid;place-items:center;color:#fff;font-weight:600;font-size:14px;box-shadow:0 1px 3px rgba(0,80,200,.3)}
+.brand-name{font-size:14px;font-weight:600;letter-spacing:-.01em;line-height:1.2}
+.brand-sub{font-size:11px;color:var(--text-3);letter-spacing:.02em}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+  color:var(--text);font-size:14px;transition:background .15s}
+.nav-item:hover{background:rgba(120,120,128,.08)}
+.nav-item.on{background:rgba(120,120,128,.14);font-weight:500}
+.nav-item .ico{width:19px;height:19px;color:var(--blue);stroke-width:1.8}
+.side-foot{margin-top:auto;padding:10px 12px;font-size:11px;color:var(--text-3);line-height:1.7}
+.side-foot b{color:var(--text-2);font-weight:500}
+
+.main{flex:1;min-width:0}
+.content{padding:0 16px calc(104px + env(safe-area-inset-bottom));max-width:760px;margin:0 auto;
+  overflow-x:hidden}
+.view{display:none}
+.view.on{display:block;animation:fadeIn .22s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+/* ---------------- page head ---------------- */
+.page-head{padding:calc(14px + env(safe-area-inset-top)) 4px 16px}
+.pd-date{font-size:13px;color:var(--text-2);font-weight:500;letter-spacing:.01em}
+.page-head h1{margin:1px 0 0;font-size:33px;font-weight:700;letter-spacing:-.024em;line-height:1.15}
+
+/* ---------------- navbar (scroll) ---------------- */
+.navbar{position:fixed;top:0;left:0;right:0;z-index:40;height:calc(50px + env(safe-area-inset-top));
+  padding-top:env(safe-area-inset-top);display:flex;align-items:center;justify-content:center;
+  background:var(--bar);backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:.5px solid var(--sep);
+  font-size:16px;font-weight:600;letter-spacing:-.01em;
+  opacity:0;transform:translateY(-100%);transition:opacity .22s,transform .22s;pointer-events:none}
+.navbar.on{opacity:1;transform:none}
+
+/* ---------------- tabbar ---------------- */
+.tabbar{position:fixed;bottom:0;left:0;right:0;z-index:30;display:flex;
+  background:var(--bar);backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  border-top:.5px solid var(--sep);
+  padding:5px 2px calc(4px + env(safe-area-inset-bottom))}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 2px;
+  color:var(--text-3);font-size:10px;letter-spacing:0}
+.tab.on{color:var(--blue)}
+.tab .ico{width:24px;height:24px;stroke-width:1.7}
+
+/* ---------------- cards & groups ---------------- */
+.card{background:var(--card);border-radius:var(--r);overflow:hidden}
+.group-title{font-size:13px;color:var(--text-2);font-weight:500;padding:0 4px 7px;letter-spacing:.01em}
+.group-head{display:flex;align-items:center;gap:8px;padding:0 4px 7px}
+.group-head .group-title{padding:0;flex:1}
+.sec{margin-top:22px}
+.sec:first-of-type{margin-top:0}
+.link{font-size:13.5px;color:var(--blue);padding:2px 2px 4px;font-weight:400}
+
+/* ---------------- hero ---------------- */
+.hero{display:flex;align-items:center;gap:16px;padding:16px 18px}
+.ring{position:relative;width:76px;height:76px;flex:none}
+.ring svg{transform:rotate(-90deg)}
+.ring-txt{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-size:15px;font-weight:600;letter-spacing:-.02em}
+.ring-txt small{font-size:9.5px;color:var(--text-3);font-weight:400;letter-spacing:0;margin-top:-2px}
+.hero-t{font-size:19px;font-weight:600;letter-spacing:-.022em}
+.hero-s{font-size:13px;color:var(--text-2);margin-top:2px;line-height:1.4}
+
+/* ---------------- health ---------------- */
+.health{display:grid;grid-template-columns:repeat(4,1fr);padding:13px 4px}
+.hcell{text-align:center;position:relative;padding:0 2px}
+.hcell+.hcell::before{content:"";position:absolute;left:0;top:12%;height:76%;width:.5px;background:var(--sep)}
+.hcell .dot{width:5px;height:5px;border-radius:50%;margin:0 auto 5px}
+.hcell .hv{font-size:16.5px;font-weight:600;letter-spacing:-.03em}
+.hcell .hv span{font-size:10px;color:var(--text-3);font-weight:400;margin-left:1px;letter-spacing:0}
+.hcell .hk{font-size:10.5px;color:var(--text-2);margin-top:1px;letter-spacing:0}
+
+/* ---------------- lists ---------------- */
+.lrow{display:flex;align-items:center;gap:12px;padding:10px 16px;position:relative;min-height:52px}
+.lrow.tap{cursor:pointer;transition:background .12s}
+.lrow.tap:active{background:var(--fill)}
+.lrow+.lrow::before{content:"";position:absolute;left:16px;right:0;top:0;height:.5px;background:var(--sep)}
+.lrow.indent+.lrow.indent::before{left:60px}
+.app-ico{width:29px;height:29px;border-radius:8px;display:grid;place-items:center;color:#fff;flex:none}
+.app-ico .ico{width:17px;height:17px;stroke-width:2}
+.lrow-mid{flex:1;min-width:0}
+.lrow-t{font-size:16px;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrow-sub{font-size:12px;color:var(--text-3);margin-top:-1px;letter-spacing:0}
+.lrow.done .lrow-t{color:var(--text-2);text-decoration:line-through;text-decoration-thickness:1px}
+.lrow.done .lrow-sub{color:var(--text-3)}
+.chk{width:24px;height:24px;border-radius:50%;border:1.5px solid var(--fill-3);flex:none;
+  display:grid;place-items:center;color:transparent;transition:.18s}
+.chk .ico{width:14px;height:14px;stroke-width:2.8}
+.lrow.done .chk{background:var(--green);border-color:var(--green);color:#fff}
+.minus{width:23px;height:23px;border-radius:50%;background:var(--red);color:#fff;flex:none;
+  display:grid;place-items:center;transition:transform .12s}
+.minus:active{transform:scale(.9)}
+.minus .ico{width:13px;height:13px;stroke-width:3}
+.add-row{color:var(--blue);display:flex;align-items:center;gap:7px;font-size:15px;padding:12px 16px;
+  width:100%;border-top:.5px solid var(--sep)}
+.add-row .ico{width:16px;height:16px;stroke-width:2.4}
+
+/* ---------------- shelf ---------------- */
+.shelf{display:grid;grid-template-columns:repeat(3,1fr);gap:18px 14px;padding:2px 2px}
+.bk{cursor:pointer}
+.bk:active{opacity:.72}
+.bk-cover{position:relative;aspect-ratio:3/4.35;border-radius:5px;overflow:hidden;
+  box-shadow:0 4px 14px rgba(0,0,0,.42),0 0 0 .5px var(--cover-ring);
+  display:flex;align-items:flex-start;padding:16px 13px 12px;transition:transform .18s}
+.bk:active .bk-cover{transform:scale(.97)}
+.bk-cover::before{content:"";position:absolute;left:0;top:0;bottom:0;width:7px;
+  background:linear-gradient(90deg,rgba(0,0,0,.24),rgba(0,0,0,.04) 60%,transparent)}
+.bk-cover::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(115deg,rgba(255,255,255,.14),transparent 42%)}
+.bk-cover span{position:relative;z-index:1;color:#fff;font-size:12.5px;font-weight:600;line-height:1.35;
+  letter-spacing:.01em;text-shadow:0 1px 3px rgba(0,0,0,.28);
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.bk-title{font-size:12px;line-height:1.35;margin-top:8px;font-weight:400;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.bk-meta{font-size:10.5px;color:var(--text-3);margin-top:1px}
+.bk-prog{height:2.5px;border-radius:2px;background:var(--fill-2);margin-top:6px;overflow:hidden}
+.bk-prog i{display:block;height:100%;background:var(--blue);border-radius:2px}
+
+/* now reading rail */
+.rail{display:flex;gap:14px;overflow-x:auto;padding:2px 2px 6px;scrollbar-width:none}
+.rail::-webkit-scrollbar{display:none}
+.rail .bk{width:104px;flex:none}
+.bk-mini{width:34px;height:46px;border-radius:3px;flex:none;display:grid;place-items:center;position:relative;
+  overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.4),0 0 0 .5px var(--cover-ring)}
+.bk-mini::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;
+  background:linear-gradient(90deg,rgba(0,0,0,.22),transparent)}
+.bk-mini span{position:relative;z-index:1;color:#fff;font-size:13px;font-weight:600;
+  text-shadow:0 1px 2px rgba(0,0,0,.22)}
+
+/* ---------------- book detail ---------------- */
+.bk-head{display:flex;gap:16px;align-items:flex-start;margin-bottom:18px}
+.bk-cover.lg{width:94px;flex:none;aspect-ratio:3/4.35;padding:12px 10px 10px}
+.bk-cover.lg span{font-size:13px}
+.bk-h-t{font-size:19px;font-weight:600;letter-spacing:-.02em;line-height:1.3}
+.bk-h-a{font-size:13px;color:var(--text-2);margin-top:3px}
+.bk-h-p{display:flex;align-items:center;gap:8px;margin-top:12px}
+.track{flex:1;height:4px;border-radius:2px;background:var(--fill-2);overflow:hidden}
+.track i{display:block;height:100%;background:var(--blue);border-radius:2px;transition:width .3s}
+.bk-h-p b{font-size:12.5px;color:var(--text-2);font-weight:500}
+
+.note{background:var(--card);border-radius:10px;padding:12px 13px;position:relative}
+.note+.note{margin-top:8px}
+.note-t{font-size:15px;line-height:1.62;padding-right:34px;letter-spacing:-.01em}
+.note-th{font-size:13px;color:var(--text-2);line-height:1.55;margin-top:7px;padding-left:10px;
+  border-left:2px solid var(--blue)}
+.note-f{display:flex;align-items:center;margin-top:8px;font-size:11px;color:var(--text-3)}
+.note-del{width:26px;height:26px;border-radius:50%;background:var(--fill);color:var(--text-2);
+  display:grid;place-items:center;position:absolute;right:10px;top:10px;transition:.15s}
+.note-del:hover{background:rgba(255,59,48,.12);color:var(--red)}
+.note-del:active{transform:scale(.9)}
+.note-del .ico{width:13px;height:13px;stroke-width:2.4}
+
+/* ---------------- plans ---------------- */
+.plan{padding:15px 16px}
+.plan+.plan{margin-top:9px}
+.plan-top{display:flex;align-items:baseline;gap:10px}
+.plan-t{font-size:16px;font-weight:600;letter-spacing:-.015em;flex:1}
+.plan-pct{font-size:14px;color:var(--blue);font-weight:500}
+.plan-goal{font-size:12.5px;color:var(--text-3);margin-top:2px}
+.plan .track{margin-top:12px;height:5px;border-radius:3px}
+.plan-foot{display:flex;align-items:center;margin-top:10px;font-size:12px;color:var(--text-2)}
+.pill{margin-left:auto;font-size:12.5px;color:var(--blue);background:var(--blue-soft);
+  padding:5px 12px;border-radius:20px;font-weight:500;transition:.15s}
+.pill:active{opacity:.65}
+
+/* ---------------- calendar ---------------- */
+.cal-head{display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:0 2px}
+.cal-head .m{font-size:19px;font-weight:600;letter-spacing:-.02em}
+.cal-nav{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:var(--blue);
+  background:var(--fill)}
+.cal-nav .ico{width:15px;height:15px;stroke-width:2.4}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal-dow{font-size:10.5px;color:var(--text-3);text-align:center;padding-bottom:2px;font-weight:500}
+.cal-cell{aspect-ratio:1;border-radius:8px;background:var(--fill);display:grid;place-items:center;
+  font-size:12px;color:var(--text-2);cursor:pointer;transition:.14s;position:relative;font-weight:400}
+.cal-cell:active{transform:scale(.94)}
+.cal-cell.out{opacity:.32;cursor:default}
+.cal-cell.l1{background:var(--heat-1);color:var(--heat-1t)}
+.cal-cell.l2{background:var(--heat-2);color:#fff}
+.cal-cell.l3{background:var(--heat-3);color:#fff}
+.cal-cell.l4{background:var(--blue);color:#fff;font-weight:600}
+.cal-cell.today{font-weight:600;padding-bottom:7px}
+.cal-cell.today::after{content:"";position:absolute;bottom:5px;left:50%;transform:translateX(-50%);
+  width:4px;height:4px;border-radius:50%;background:var(--text)}
+.cal-cell.sel{box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--blue)}
+.cal-legend{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--text-3);margin-top:12px;justify-content:flex-end}
+.cal-legend i{width:9px;height:9px;border-radius:3px;display:block}
+
+/* ---------------- modal ---------------- */
+.mask{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.55);
+  display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:.2s}
+.mask.on{opacity:1;pointer-events:auto}
+.sheet{width:100%;max-width:520px;background:var(--sheet);border-radius:14px 14px 0 0;
+  padding:0 16px calc(20px + env(safe-area-inset-bottom));transform:translateY(26px);
+  transition:transform .26s cubic-bezier(.32,.72,0,1);max-height:90vh;overflow-y:auto;
+  -webkit-overflow-scrolling:touch}
+.mask.on .sheet{transform:none}
+.sheet .card,.sheet .note{background:var(--card-sheet)}
+.sheet .field input,.sheet .field select,.sheet .field textarea{background:var(--card-sheet)}
+.sheet .opt{background:var(--card-sheet)}
+@media(min-width:860px){.mask{align-items:center}.sheet{border-radius:14px;transform:scale(.97)}}
+.grabber{width:36px;height:5px;border-radius:3px;background:var(--fill-3);margin:8px auto 14px}
+.sheet-h{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.sheet-h h3{margin:0;font-size:19px;font-weight:600;letter-spacing:-.02em;flex:1}
+.sheet-p{font-size:13px;color:var(--text-2);margin:0 0 14px;line-height:1.55}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:12.5px;color:var(--text-2);margin:0 4px 6px}
+.field input,.field textarea,.field select{width:100%;background:var(--card);border:none;
+  border-radius:10px;padding:12px 14px;outline:none;font-size:16px;transition:box-shadow .15s;
+  -webkit-appearance:none;appearance:none}
+.field textarea{min-height:132px;line-height:1.55;font-size:14px;resize:vertical}
+.field input:focus,.field textarea:focus,.field select:focus{box-shadow:0 0 0 3px var(--blue-soft)}
+.field select{background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1.5L6 6.5L11 1.5' stroke='%238E8E93' stroke-width='1.8' fill='none' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 14px center}
+.picker{display:flex;gap:9px;flex-wrap:wrap;padding:2px}
+.opt{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;
+  background:var(--card);color:var(--text-2);transition:.15s}
+.opt .ico{width:19px;height:19px}
+.opt.on{box-shadow:inset 0 0 0 2px var(--blue);color:var(--blue)}
+.opt.color{border-radius:50%}
+.opt.color.on{box-shadow:inset 0 0 0 2px #fff,0 0 0 2.5px var(--blue)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:13px 18px;
+  border-radius:11px;font-size:16px;font-weight:500;transition:.15s;background:var(--fill);color:var(--text)}
+.btn:active{opacity:.7}
+.btn.primary{background:var(--blue);color:#fff}
+.btn.block{width:100%}
+.btn.danger{background:var(--red-soft);color:var(--red);font-size:15px;padding:12px}
+.btn .ico{width:17px;height:17px;stroke-width:2.2}
+
+.sw{width:51px;height:31px;border-radius:16px;background:var(--fill-2);position:relative;flex:none;
+  transition:background .22s;cursor:pointer}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;
+  background:#fff;box-shadow:0 2px 5px rgba(0,0,0,.35);transition:transform .22s cubic-bezier(.32,.72,0,1)}
+.sw.on{background:var(--green)}
+.sw.on::after{transform:translateX(20px)}
+
+/* ---------------- misc ---------------- */
+#toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translate(-50%,10px);
+  z-index:90;background:var(--toast);color:#fff;border:.5px solid rgba(255,255,255,.10);padding:11px 18px;border-radius:22px;font-size:13.5px;
+  backdrop-filter:blur(10px);opacity:0;pointer-events:none;transition:.24s;max-width:86vw;text-align:center;
+  font-weight:400;letter-spacing:-.005em}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+.empty{background:var(--card);border-radius:var(--r);padding:26px 18px;text-align:center;
+  font-size:13.5px;color:var(--text-3);line-height:1.6}
+.seg{display:flex;background:var(--fill);border-radius:9px;padding:2px;gap:0}
+.seg button{flex:1;padding:6px 10px;border-radius:7px;font-size:13px;color:var(--text);transition:.16s;text-align:center}
+.seg button.on{background:var(--seg-thumb);font-weight:500;box-shadow:var(--seg-shadow)}
+
+@media(min-width:860px){
+  .sidebar{display:flex}
+  .tabbar{display:none}
+  .navbar{display:none}
+  .content{padding:0 32px 72px;max-width:800px}
+  .page-head{padding:34px 4px 22px}
+  .page-head h1{font-size:38px}
+  .shelf{grid-template-columns:repeat(4,1fr);gap:22px 18px}
+  .rail .bk{width:118px}
+  #toast{bottom:32px}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5Z"/><path d="M19 18v3H6.5"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M3 12h4l2.5-7 4 14 2.5-7h5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.5 2.5 0 0 0-3.5-3.5L4.5 16.5 4 20Z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5l5 5L19.5 7"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 20h18M6.5 20v-6M11.5 20V8M16.5 20v-9"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4h-4"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c1.2-3.6 4-5.4 7.5-5.4s6.3 1.8 7.5 5.4"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M10 6l6 6-6 6"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6.5 7l1 13h9l1-13"/></symbol>
+  <symbol id="i-shoe" viewBox="0 0 24 24"><path d="M3 15V9l4 3 3-4 4 6h7v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">生</div>
+      <div>
+        <div class="brand-name">生活记录</div>
+        <div class="brand-sub">Life Board</div>
+      </div>
+    </div>
+    <button class="nav-item on" data-v="today"><svg class="ico"><use href="#i-sun"/></svg>今日</button>
+    <button class="nav-item" data-v="calendar"><svg class="ico"><use href="#i-cal"/></svg>日历</button>
+    <button class="nav-item" data-v="reading"><svg class="ico"><use href="#i-book"/></svg>阅读</button>
+    <button class="nav-item" data-v="study"><svg class="ico"><use href="#i-chart"/></svg>学习</button>
+    <button class="nav-item" data-v="me"><svg class="ico"><use href="#i-user"/></svg>我的</button>
+    <div class="side-foot">
+      <b>原型演示</b><br>
+      数据存本地，未接后端<br>
+      COROS · 微信读书 待接入
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="navbar" id="navbar"><span id="nav-title">今日</span></div>
+    <div class="content">
+
+      <!-- ================= TODAY ================= -->
+      <section class="view on" id="v-today">
+        <div class="page-head">
+          <div class="pd-date" id="pd-date">11 月 8 日 星期日</div>
+          <h1>今日</h1>
+        </div>
+
+        <div class="card hero">
+          <div class="ring">
+            <svg width="76" height="76" viewBox="0 0 76 76">
+              <circle cx="38" cy="38" r="31" stroke="rgba(120,120,128,.18)" stroke-width="7" fill="none"/>
+              <circle id="ring-fg" cx="38" cy="38" r="31" stroke="#007AFF" stroke-width="7" fill="none"
+                stroke-linecap="round" stroke-dasharray="194.78" stroke-dashoffset="194.78"
+                style="transition:stroke-dashoffset .45s cubic-bezier(.32,1,.4,1)"/>
+            </svg>
+            <div class="ring-txt"><div id="ring-num">0/5</div><small>完成</small></div>
+          </div>
+          <div style="min-width:0">
+            <div class="hero-t" id="hero-t">今天还没开始</div>
+            <div class="hero-s" id="hero-s">从最简单的一项开始。</div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div class="group-title">身体数据</div>
+          <div class="card"><div class="health" id="health"></div></div>
+        </div>
+
+        <div class="sec">
+          <div class="group-head">
+            <div class="group-title">打卡</div>
+            <button class="link" id="edit-toggle">编辑</button>
+          </div>
+          <div class="card" id="habits"></div>
+        </div>
+
+        <div class="sec">
+          <div class="group-title">在读</div>
+          <div id="today-books"></div>
+        </div>
+      </section>
+
+      <!-- ================= CALENDAR ================= -->
+      <section class="view" id="v-calendar">
+        <div class="page-head">
+          <div class="pd-date">坚持看得见</div>
+          <h1>日历</h1>
+        </div>
+
+        <div class="cal-head">
+          <div class="m" id="cal-month"></div>
+          <button class="cal-nav" id="cal-prev"><svg class="ico"><use href="#i-left"/></svg></button>
+          <button class="cal-nav" id="cal-next"><svg class="ico"><use href="#i-right"/></svg></button>
+          <div style="flex:1"></div>
+          <div style="font-size:12px;color:var(--text-3)" id="cal-sum"></div>
+        </div>
+        <div class="cal-grid" id="cal-dow" style="margin-bottom:8px"></div>
+        <div class="cal-grid" id="cal-grid"></div>
+        <div class="cal-legend">
+          少 <i style="background:rgba(120,120,128,.10)"></i>
+          <i style="background:var(--heat-2)"></i>
+          <i style="background:var(--heat-3)"></i>
+          <i style="background:var(--blue)"></i> 多
+        </div>
+
+        <div class="sec">
+          <div class="group-head">
+            <div class="group-title" id="day-detail-title">当天记录</div>
+            <span style="font-size:12px;color:var(--text-3)">点一下可补录或取消</span>
+          </div>
+          <div class="card" id="day-detail"></div>
+        </div>
+      </section>
+
+      <!-- ================= READING ================= -->
+      <section class="view" id="v-reading">
+        <div class="page-head" style="display:flex;align-items:flex-end;gap:12px">
+          <div style="flex:1">
+            <div class="pd-date">书架</div>
+            <h1>阅读</h1>
+          </div>
+          <button class="cal-nav" style="width:34px;height:34px;margin-bottom:6px" onclick="openAddMenu()">
+            <svg class="ico" style="width:18px;height:18px;stroke-width:2.4"><use href="#i-plus"/></svg>
+          </button>
+        </div>
+
+        <div class="sec" id="rail-sec">
+          <div class="group-title">正在阅读</div>
+          <div class="rail" id="rail"></div>
+        </div>
+
+        <div class="sec">
+          <div class="group-head">
+            <div class="group-title">全部书籍</div>
+            <div class="seg" style="width:174px" id="seg">
+              <button data-f="all" class="on">全部</button>
+              <button data-f="reading">在读</button>
+              <button data-f="done">读完</button>
+            </div>
+          </div>
+          <div class="shelf" id="shelf"></div>
+        </div>
+      </section>
+
+      <!-- ================= STUDY ================= -->
+      <section class="view" id="v-study">
+        <div class="page-head">
+          <div class="pd-date">计划与记录</div>
+          <h1>学习</h1>
+        </div>
+        <div class="group-title">在进行的计划</div>
+        <div id="plans"></div>
+
+        <div class="sec">
+          <div class="group-title">最近记录</div>
+          <div class="card" id="study-logs"></div>
+        </div>
+      </section>
+
+      <!-- ================= ME ================= -->
+      <section class="view" id="v-me">
+        <div class="page-head">
+          <div class="pd-date">设置</div>
+          <h1>我的</h1>
+        </div>
+
+        <div class="card" style="padding:16px 16px;display:flex;align-items:center;gap:13px;margin-bottom:22px">
+          <div class="avatar" style="width:46px;height:46px;border-radius:50%;background:linear-gradient(160deg,var(--blue),#0B5FD0);
+            display:grid;place-items:center;color:#fff;font-size:17px;font-weight:500">研</div>
+          <div style="flex:1">
+            <div style="font-size:17px;font-weight:600;letter-spacing:-.015em">研究者</div>
+            <div style="font-size:12.5px;color:var(--text-2)" id="me-stat">已记录 0 天</div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div class="group-title">外观</div>
+          <div class="card">
+            <div class="lrow tap indent" onclick="toggleTheme()">
+              <div class="app-ico" style="background:var(--indigo)"><svg class="ico"><use href="#i-moon"/></svg></div>
+              <div class="lrow-mid">
+                <div class="lrow-t">深色模式</div>
+                <div class="lrow-sub" id="theme-sub">已开启</div>
+              </div>
+              <div class="sw on" id="sw-theme"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="group-title" style="margin-top:22px">数据连接</div>
+        <div class="card">
+          <div class="lrow tap" onclick="toast('COROS 走官方 MCP 授权，接入后自动同步睡眠与训练')">
+            <div class="app-ico" style="background:#FF9F0A"><svg class="ico"><use href="#i-run"/></svg></div>
+            <div class="lrow-mid"><div class="lrow-t">COROS</div><div class="lrow-sub">睡眠 · HRV · 训练负荷</div></div>
+            <span style="font-size:12.5px;color:var(--text-3)">待接入</span>
+            <svg class="ico" style="width:15px;height:15px;color:var(--text-3)"><use href="#i-right"/></svg>
+          </div>
+          <div class="lrow tap" onclick="toast('微信读书用官方 API Key，可直接同步书架与划线')">
+            <div class="app-ico" style="background:#34C759"><svg class="ico"><use href="#i-book"/></svg></div>
+            <div class="lrow-mid"><div class="lrow-t">微信读书</div><div class="lrow-sub">书架 · 进度 · 划线</div></div>
+            <span style="font-size:12.5px;color:var(--text-3)">演示导入</span>
+            <svg class="ico" style="width:15px;height:15px;color:var(--text-3)"><use href="#i-right"/></svg>
+          </div>
+          <div class="lrow tap" onclick="toast('打卡与阅读数据将通过云数据库在手机、桌面间同步')">
+            <div class="app-ico" style="background:#007AFF"><svg class="ico"><use href="#i-sync"/></svg></div>
+            <div class="lrow-mid"><div class="lrow-t">多端同步</div><div class="lrow-sub">手机 + 桌面，同一份数据</div></div>
+            <span style="font-size:12.5px;color:var(--text-3)">已规划</span>
+            <svg class="ico" style="width:15px;height:15px;color:var(--text-3)"><use href="#i-right"/></svg>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div class="group-head">
+            <div class="group-title">打卡项</div>
+            <button class="link" onclick="openAddHabit()">新建</button>
+          </div>
+          <div class="card" id="habit-manage"></div>
+        </div>
+
+        <div class="sec">
+          <div class="group-title">数据</div>
+          <div class="card">
+            <div class="lrow tap" onclick="toast('演示版：导出功能稍后开放')">
+              <div class="app-ico" style="background:#8E8E93"><svg class="ico"><use href="#i-chart"/></svg></div>
+              <div class="lrow-mid"><div class="lrow-t">导出全部记录</div><div class="lrow-sub">CSV / JSON</div></div>
+              <svg class="ico" style="width:15px;height:15px;color:var(--text-3)"><use href="#i-right"/></svg>
+            </div>
+            <div class="lrow tap" onclick="resetDemo()">
+              <div class="app-ico" style="background:#FF3B30"><svg class="ico"><use href="#i-trash"/></svg></div>
+              <div class="lrow-mid"><div class="lrow-t">重置演示数据</div><div class="lrow-sub">恢复初始示例</div></div>
+              <svg class="ico" style="width:15px;height:15px;color:var(--text-3)"><use href="#i-right"/></svg>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <nav class="tabbar">
+      <button class="tab on" data-v="today"><svg class="ico"><use href="#i-sun"/></svg>今日</button>
+      <button class="tab" data-v="calendar"><svg class="ico"><use href="#i-cal"/></svg>日历</button>
+      <button class="tab" data-v="reading"><svg class="ico"><use href="#i-book"/></svg>阅读</button>
+      <button class="tab" data-v="study"><svg class="ico"><use href="#i-chart"/></svg>学习</button>
+      <button class="tab" data-v="me"><svg class="ico"><use href="#i-user"/></svg>我的</button>
+    </nav>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast"></div>
+
+<script>
+/* =========================================================
+   生活记录 · 交互原型（Apple 视觉，演示数据）
+   ========================================================= */
+const TODAY = new Date(2026, 10, 8);
+const DAY = 86400000;
+const KEY = 'lifeboard.demo.v2';
+
+const ICON_SET = ['sun','book','run','moon','pen','chart'];
+const ICON_MAP = {sun:'#i-sun', book:'#i-book', run:'#i-run', moon:'#i-moon', pen:'#i-pen', chart:'#i-chart'};
+const HCOLORS = ['#FF9F0A','#0A84FF','#30D158','#5E5CE6','#BF5AF2','#FF375F','#40C8E0','#8E8E93'];
+const COVERS = [
+  ['#1F3A5F','#3E6B96'], ['#5B4636','#94765A'], ['#20453C','#3F7A64'],
+  ['#412A47','#7A4C7C'], ['#6E2A2A','#A85858'], ['#2C2C34','#4C4C58'],
+  ['#7A5223','#B5813F'], ['#243A4A','#3C6076']
+];
+
+const iso = d => { const x = new Date(d); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); };
+const addDays = (d,n) => new Date(d.getTime()+n*DAY);
+const keyToday = () => iso(TODAY);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------------- seed ---------------- */
+function seed(){
+  const habits = [
+    {id:'h1', name:'早起 6:30',    icon:'sun',   color:'#FF9F0A', target:'每天'},
+    {id:'h2', name:'阅读 30 分钟',  icon:'book',  color:'#0A84FF', target:'每天'},
+    {id:'h3', name:'运动',         icon:'run',  color:'#30D158', target:'每周 4 次'},
+    {id:'h4', name:'冥想 10 分钟',  icon:'moon', color:'#5E5CE6', target:'每天'},
+    {id:'h5', name:'睡前复盘',      icon:'pen',  color:'#BF5AF2', target:'工作日'},
+  ];
+  const logs = {};
+  let rnd = 20261108;
+  const rand = () => (rnd = (rnd*1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for(let i=180;i>=0;i--){
+    const d = iso(addDays(TODAY,-i));
+    const dow = addDays(TODAY,-i).getDay();
+    habits.forEach((h,hi)=>{
+      let p = [0.72,0.9,0.5,0.62,0.75][hi];
+      if(hi===2 && (dow===2||dow===4||dow===6||dow===0)) p += 0.22;
+      if(hi===4 && (dow===0||dow===6)) p -= 0.28;
+      if(i<10) p += 0.12;
+      if(rand() < p) (logs[d] = logs[d]||{})[h.id] = true;
+    });
+  }
+  logs[keyToday()] = {h1:true, h2:true, h4:true};
+
+  const books = [
+    {id:'b1', title:'反脆弱', author:'纳西姆·塔勒布', progress:45, status:'reading',
+     c1:COVERS[0][0], c2:COVERS[0][1], last:'今天', minutes:412},
+    {id:'b2', title:'穷查理宝典', author:'彼得·考夫曼', progress:12, status:'reading',
+     c1:COVERS[3][0], c2:COVERS[3][1], last:'昨天', minutes:96},
+    {id:'b3', title:'周期', author:'霍华德·马克斯', progress:68, status:'reading',
+     c1:COVERS[7][0], c2:COVERS[7][1], last:'3 天前', minutes:288},
+    {id:'b4', title:'原则', author:'瑞·达利欧', progress:100, status:'done',
+     c1:COVERS[2][0], c2:COVERS[2][1], last:'10 月', minutes:663},
+    {id:'b5', title:'思考，快与慢', author:'丹尼尔·卡尼曼', progress:100, status:'done',
+     c1:COVERS[5][0], c2:COVERS[5][1], last:'9 月', minutes:720},
+    {id:'b6', title:'伟大的中国工业革命', author:'文一', progress:23, status:'reading',
+     c1:COVERS[4][0], c2:COVERS[4][1], last:'上周', minutes:154},
+  ];
+  const notes = [
+    {id:'n1', book:'反脆弱', text:'风会熄灭蜡烛，却能使火越烧越旺。', thought:'对随机性的态度，才是分野所在。', at:'今天 08:12'},
+    {id:'n2', book:'反脆弱', text:'你越是试图控制，系统就越脆弱。', at:'今天 08:05'},
+    {id:'n3', book:'周期', text:'钟摆永远在乐观与悲观之间摆动，很少停在中间。', thought:'和情绪指标是一回事。', at:'3 天前'},
+    {id:'n4', book:'穷查理宝典', text:'如果我知道我会死在哪里，那我就永远不去那个地方。', at:'昨天 22:40'},
+    {id:'n5', book:'反脆弱', text:'如果一件事的失败不会让你出局，那它就值得尝试。', at:'今天 08:20'},
+  ];
+  const plans = [
+    {id:'p1', title:'Python 数据分析', goal:'把回测脚本全部重写一遍', weeks:12, done:7, weekDone:3, weekTarget:4},
+    {id:'p2', title:'英语精读', goal:'每周两篇 FT 长文', weeks:24, done:9, weekDone:2, weekTarget:2},
+    {id:'p3', title:'缠论体系梳理', goal:'整理成一份可复用的分析框架', weeks:8, done:2, weekDone:1, weekTarget:2},
+  ];
+  const studyLogs = [
+    {plan:'Python 数据分析', min:45, content:'把回测引擎的滑点模型改成可配置', at:'今天 07:30'},
+    {plan:'英语精读', min:30, content:'FT：美债期限结构与降息预期', at:'昨天 21:10'},
+    {plan:'缠论体系梳理', min:60, content:'中枢扩展与第三类买卖点复盘', at:'2 天前'},
+  ];
+  const health = {sleep:'7:12', hrv:'62', rhr:'48', load:'380'};
+  return {habits, logs, books, notes, plans, studyLogs, health, selectedDay:keyToday(), filter:'all'};
+}
+
+let S;
+function load(){
+  try{
+    const raw = localStorage.getItem(KEY);
+    if(raw){ S = JSON.parse(raw); return; }
+  }catch(e){}
+  S = seed(); save();
+}
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+function resetDemo(){
+  localStorage.removeItem(KEY); S = seed(); save();
+  editMode = false;
+  renderAll(); toast('演示数据已重置');
+}
+
+/* ---------------- helpers ---------------- */
+function doneCount(k){
+  const o = S.logs[k] || {};
+  return S.habits.filter(h => o[h.id]).length;
+}
+function recordedDays(){ return Object.keys(S.logs).filter(k => Object.keys(S.logs[k]||{}).length > 0).length; }
+
+let toastTimer;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('on'), 2000);
+}
+
+/* ---------------- navigation ---------------- */
+const TITLES = {today:'今日', calendar:'日历', reading:'阅读', study:'学习', me:'我的'};
+function go(v){
+  document.querySelectorAll('.view').forEach(x=>x.classList.toggle('on', x.id==='v-'+v));
+  document.querySelectorAll('.nav-item').forEach(x=>x.classList.toggle('on', x.dataset.v===v));
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on', x.dataset.v===v));
+  document.getElementById('nav-title').textContent = TITLES[v];
+  document.getElementById('navbar').classList.remove('on');
+  window.scrollTo({top:0, behavior:'instant'});
+  if(v==='calendar') renderCalendar();
+  if(v==='reading') renderReading();
+  if(v==='study') renderStudy();
+  if(v==='me') renderMe();
+}
+document.querySelectorAll('.nav-item,.tab').forEach(b => b.onclick = () => go(b.dataset.v));
+
+let lastY = 0;
+window.addEventListener('scroll', ()=>{
+  const y = window.scrollY;
+  const nb = document.getElementById('navbar');
+  if(y > 64) nb.classList.add('on'); else nb.classList.remove('on');
+  lastY = y;
+}, {passive:true});
+
+/* ---------------- TODAY ---------------- */
+let editMode = false;
+
+function renderToday(){
+  const total = S.habits.length;
+  const n = doneCount(keyToday());
+  const pct = total ? n/total : 0;
+  const circ = 2*Math.PI*31;
+  document.getElementById('ring-fg').style.strokeDashoffset = circ*(1-pct);
+  document.getElementById('ring-num').textContent = n + '/' + total;
+
+  const tEl = document.getElementById('hero-t'), sEl = document.getElementById('hero-s');
+  if(!total){ tEl.textContent = '还没有打卡项'; sEl.textContent = '先新建一项，从明天开始。'; }
+  else if(n === total){ tEl.textContent = '今天已全部完成'; sEl.textContent = '5 项都打满了，收工。'.replace('5', total); }
+  else if(n === 0){ tEl.textContent = '今天还没开始'; sEl.textContent = '从最简单的一项开始。'; }
+  else { tEl.textContent = '已完成 ' + n + ' 项'; sEl.textContent = '还剩 ' + (total-n) + ' 项。'; }
+
+  const h = S.health;
+  document.getElementById('health').innerHTML = [
+    ['#5E5CE6', h.sleep, '', '睡眠'],
+    ['#FF375F', h.hrv, 'ms', 'HRV'],
+    ['#FF9F0A', h.rhr, '', '静息心率'],
+    ['#34C759', h.load, '', '训练负荷'],
+  ].map(([c,v,u,k]) => `<div class="hcell">
+      <div class="dot" style="background:${c}"></div>
+      <div class="hv">${v}${u?`<span>${u}</span>`:''}</div>
+      <div class="hk">${k}</div>
+    </div>`).join('');
+
+  renderHabits();
+
+  const reading = S.books.filter(b=>b.status==='reading').slice(0,3);
+  document.getElementById('today-books').innerHTML = reading.length
+    ? `<div class="card">${reading.map((b,i)=>`
+        <div class="lrow tap ${i>0?'indent':''}" data-book="${b.id}" style="align-items:center">
+          <div class="bk-mini" style="background:linear-gradient(150deg,${b.c1},${b.c2})"><span>${esc(b.title.slice(0,1))}</span></div>
+          <div class="lrow-mid">
+            <div class="lrow-t" style="font-size:15px">${esc(b.title)}</div>
+            <div class="lrow-sub">${esc(b.author)} · ${b.progress}%</div>
+          </div>
+          <svg class="ico" style="width:15px;height:15px;color:var(--text-3)"><use href="#i-right"/></svg>
+        </div>`).join('')}</div>`
+    : `<div class="empty">书架是空的，去阅读页添加一本。</div>`;
+}
+
+function renderHabits(){
+  const today = S.logs[keyToday()] || {};
+  const rows = S.habits.map(hb=>{
+    const done = !!today[hb.id];
+    const right = editMode
+      ? `<button class="minus" data-del="${hb.id}" aria-label="删除"><svg class="ico"><use href="#i-minus"/></svg></button>`
+      : `<div class="chk"><svg class="ico"><use href="#i-check"/></svg></div>`;
+    return `<div class="lrow indent tap ${done && !editMode ? 'done':''}" data-habit="${hb.id}">
+      <div class="app-ico" style="background:${hb.color}"><svg class="ico"><use href="${ICON_MAP[hb.icon]||'#i-sun'}"/></svg></div>
+      <div class="lrow-mid">
+        <div class="lrow-t">${esc(hb.name)}</div>
+        <div class="lrow-sub">${esc(hb.target)}</div>
+      </div>
+      ${right}
+    </div>`;
+  }).join('');
+
+  document.getElementById('habits').innerHTML = rows
+    + (editMode ? '' : `<button class="add-row" data-add="1"><svg class="ico"><use href="#i-plus"/></svg>新建打卡项</button>`);
+  document.getElementById('edit-toggle').textContent = editMode ? '完成' : '编辑';
+}
+
+document.getElementById('edit-toggle').onclick = ()=>{
+  editMode = !editMode;
+  renderHabits();
+  if(editMode) toast('点击红色减号可删除打卡项');
+};
+
+document.getElementById('habits').addEventListener('click', e=>{
+  if(e.target.closest('[data-add]')){ openAddHabit(); return; }
+  if(editMode){
+    const del = e.target.closest('[data-del]');
+    if(del){ removeHabit(del.dataset.del); }
+    return;
+  }
+  const row = e.target.closest('[data-habit]');
+  if(!row) return;
+  const id = row.dataset.habit, k = keyToday();
+  S.logs[k] = S.logs[k] || {};
+  const was = !!S.logs[k][id];
+  if(was) delete S.logs[k][id]; else S.logs[k][id] = true;
+  save(); renderToday();
+  if(!was){
+    const hb = S.habits.find(h=>h.id===id);
+    toast('已打卡 · ' + hb.name);
+  }
+});
+
+function removeHabit(id){
+  const hb = S.habits.find(h=>h.id===id);
+  if(!hb) return;
+  S.habits = S.habits.filter(h=>h.id!==id);
+  Object.keys(S.logs).forEach(k=>{ if(S.logs[k]) delete S.logs[k][id]; });
+  save();
+  if(!S.habits.length) editMode = false;
+  renderToday(); renderCalendar(); renderMe();
+  toast('已删除「' + hb.name + '」');
+}
+
+/* ---------------- CALENDAR ---------------- */
+let calCursor = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
+
+function renderCalendar(){
+  const y = calCursor.getFullYear(), m = calCursor.getMonth();
+  document.getElementById('cal-month').textContent = `${y} 年 ${m+1} 月`;
+  document.getElementById('cal-dow').innerHTML = ['日','一','二','三','四','五','六']
+    .map(d=>`<div class="cal-dow">${d}</div>`).join('');
+
+  const first = new Date(y,m,1);
+  const start = addDays(first, -first.getDay());
+  const daysInMonth = new Date(y,m+1,0).getDate();
+  const totalCells = Math.ceil((first.getDay() + daysInMonth) / 7) * 7;
+  const total = S.habits.length || 1;
+  const cells = [];
+  for(let i=0;i<totalCells;i++){
+    const d = addDays(start,i);
+    const k = iso(d);
+    const inMonth = d.getMonth()===m;
+    const cnt = S.logs[k] ? doneCount(k) : 0;
+    const r = cnt/total;
+    const lv = r>=1?4 : r>=.75?3 : r>=.5?2 : r>0?1 : 0;
+    const cls = [inMonth?'':'out', k===keyToday()?'today':'', lv?'l'+lv:'', k===S.selectedDay?'sel':''].join(' ');
+    cells.push(`<div class="cal-cell ${cls}" data-day="${k}">${d.getDate()}</div>`);
+  }
+  document.getElementById('cal-grid').innerHTML = cells.join('');
+
+  const monthDays = Array.from({length:daysInMonth},(_,i)=>iso(new Date(y,m,i+1)));
+  const full = monthDays.filter(k=>S.logs[k] && doneCount(k)===S.habits.length).length;
+  const any = monthDays.filter(k=>S.logs[k] && doneCount(k)>0).length;
+  document.getElementById('cal-sum').textContent = `完成 ${full} 天 · 有记录 ${any} 天`;
+
+  renderDayDetail(S.selectedDay || keyToday());
+}
+
+function renderDayDetail(k){
+  S.selectedDay = k; save();
+  const d = new Date(k.replace(/-/g,'/'));
+  document.getElementById('day-detail-title').textContent =
+    `${d.getMonth()+1} 月 ${d.getDate()} 日 星期${'日一二三四五六'[d.getDay()]}`;
+  const o = S.logs[k] || {};
+  const box = document.getElementById('day-detail');
+  if(!S.habits.length){ box.innerHTML = `<div class="empty">还没有打卡项</div>`; return; }
+  box.innerHTML = S.habits.map(hb=>{
+    const on = !!o[hb.id];
+    return `<div class="lrow indent tap ${on?'done':''}" data-daylog="${hb.id}">
+      <div class="app-ico" style="background:${hb.color}"><svg class="ico"><use href="${ICON_MAP[hb.icon]||'#i-sun'}"/></svg></div>
+      <div class="lrow-mid"><div class="lrow-t">${esc(hb.name)}</div></div>
+      <div class="chk"><svg class="ico"><use href="#i-check"/></svg></div>
+    </div>`;
+  }).join('');
+  // 更新日历上的选中框
+  document.querySelectorAll('.cal-cell[data-day]').forEach(c=>{
+    c.classList.toggle('sel', c.dataset.day===k);
+  });
+}
+
+document.getElementById('day-detail').addEventListener('click', e=>{
+  const row = e.target.closest('[data-daylog]');
+  if(!row) return;
+  const id = row.dataset.daylog, k = S.selectedDay;
+  S.logs[k] = S.logs[k] || {};
+  if(S.logs[k][id]) delete S.logs[k][id]; else S.logs[k][id] = true;
+  save(); renderCalendar(); renderToday();
+});
+
+document.getElementById('cal-grid').addEventListener('click', e=>{
+  const c = e.target.closest('[data-day]'); if(!c) return;
+  if(c.classList.contains('out')) return;
+  renderDayDetail(c.dataset.day);
+});
+document.getElementById('cal-prev').onclick = ()=>{ calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth()-1, 1); renderCalendar(); };
+document.getElementById('cal-next').onclick = ()=>{ calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth()+1, 1); renderCalendar(); };
+
+/* ---------------- READING ---------------- */
+function coverHTML(b, extraClass){
+  return `<div class="bk-cover ${extraClass||''}" style="background:linear-gradient(150deg,${b.c1},${b.c2})">
+    <span>${esc(b.title)}</span>
+  </div>`;
+}
+
+function renderReading(){
+  const reading = S.books.filter(b=>b.status==='reading');
+  const rail = document.getElementById('rail');
+  document.getElementById('rail-sec').style.display = reading.length ? '' : 'none';
+  rail.innerHTML = reading.map(b=>`
+    <div class="bk" data-book="${b.id}">
+      ${coverHTML(b)}
+      <div class="bk-title">${esc(b.title)}</div>
+      <div class="bk-meta">${b.progress}%</div>
+    </div>`).join('');
+
+  const f = S.filter || 'all';
+  const list = S.books.filter(b => f==='all' || b.status===f);
+  const shelf = document.getElementById('shelf');
+  shelf.innerHTML = list.length ? list.map(b=>`
+    <div class="bk" data-book="${b.id}">
+      ${coverHTML(b)}
+      <div class="bk-title">${esc(b.title)}</div>
+      <div class="bk-meta">${b.status==='done' ? '已读完' : b.progress+'%'}</div>
+    </div>`).join('')
+    : `<div class="empty" style="grid-column:1/-1">这里还没有书。</div>`;
+}
+
+document.getElementById('shelf').addEventListener('click', e=>{
+  const el = e.target.closest('[data-book]'); if(!el) return;
+  openBook(el.dataset.book);
+});
+document.getElementById('rail').addEventListener('click', e=>{
+  const el = e.target.closest('[data-book]'); if(!el) return;
+  openBook(el.dataset.book);
+});
+document.getElementById('today-books').addEventListener('click', e=>{
+  const el = e.target.closest('[data-book]'); if(!el) return;
+  openBook(el.dataset.book);
+});
+document.getElementById('seg').addEventListener('click', e=>{
+  const b = e.target.closest('[data-f]'); if(!b) return;
+  S.filter = b.dataset.f; save();
+  document.querySelectorAll('#seg button').forEach(x=>x.classList.toggle('on', x===b));
+  renderReading();
+});
+
+function openBook(id){
+  const b = S.books.find(x=>x.id===id); if(!b) return;
+  const ns = S.notes.filter(n=>n.book===b.title);
+  modal(`
+    <div class="grabber"></div>
+    <div class="bk-head">
+      ${coverHTML(b,'lg')}
+      <div style="flex:1;min-width:0;padding-top:2px">
+        <div class="bk-h-t">${esc(b.title)}</div>
+        <div class="bk-h-a">${esc(b.author)}</div>
+        <div class="bk-h-p">
+          <div class="track"><i style="width:${b.progress}%"></i></div>
+          <b>${b.status==='done' ? '读完' : b.progress+'%'}</b>
+        </div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:8px">${ns.length} 条划线 · 累计 ${b.minutes} 分钟</div>
+      </div>
+    </div>
+
+    <div class="group-title" style="padding:0 4px 8px">划线</div>
+    ${ns.length ? ns.map(n=>`
+      <div class="note">
+        <button class="note-del" data-note="${n.id}" aria-label="删除划线">
+          <svg class="ico"><use href="#i-close"/></svg>
+        </button>
+        <div class="note-t">${esc(n.text)}</div>
+        ${n.thought?`<div class="note-th">${esc(n.thought)}</div>`:''}
+        <div class="note-f">${esc(n.at||'')}</div>
+      </div>`).join('')
+      : `<div class="empty">这本书还没有划线。导入时粘贴的段落会出现在这里。</div>`}
+
+    <div style="display:flex;gap:9px;margin-top:18px">
+      <button class="btn block" style="flex:1" onclick="closeModal()">关闭</button>
+      <button class="btn danger" style="flex:none;padding:12px 16px" onclick="removeBook('${b.id}')">删除这本书</button>
+    </div>
+    <div style="height:6px"></div>
+  `);
+}
+
+document.getElementById('modal-root').addEventListener('click', e=>{
+  const del = e.target.closest('[data-note]');
+  if(!del) return;
+  const id = del.dataset.note;
+  const n = S.notes.find(x=>x.id===id);
+  if(!n) return;
+  const book = S.books.find(b=>b.title===n.book);
+  S.notes = S.notes.filter(x=>x.id!==id);
+  save();
+  if(book) openBook(book.id); else closeModal();
+  renderReading(); renderToday();
+  toast('已删除 1 条划线');
+});
+
+function removeBook(id){
+  const b = S.books.find(x=>x.id===id); if(!b) return;
+  S.books = S.books.filter(x=>x.id!==id);
+  S.notes = S.notes.filter(n=>n.book!==b.title);
+  save(); closeModal(); renderReading(); renderToday();
+  toast('已删除《' + b.title + '》');
+}
+
+/* ---------------- STUDY ---------------- */
+function renderStudy(){
+  document.getElementById('plans').innerHTML = S.plans.map(p=>{
+    const pct = Math.round(p.done/p.weeks*100);
+    return `<div class="card plan">
+      <div class="plan-top">
+        <div class="plan-t">${esc(p.title)}</div>
+        <div class="plan-pct">${pct}%</div>
+      </div>
+      <div class="plan-goal">${esc(p.goal)}</div>
+      <div class="track"><i style="width:${pct}%"></i></div>
+      <div class="plan-foot">
+        <span>第 ${p.done} / ${p.weeks} 周 · 本周 ${p.weekDone} / ${p.weekTarget} 次</span>
+        <button class="pill" data-plan="${p.id}">记一次</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('study-logs').innerHTML = S.studyLogs.map(l=>`
+    <div class="lrow indent">
+      <div class="app-ico" style="background:#007AFF"><svg class="ico"><use href="#i-chart"/></svg></div>
+      <div class="lrow-mid">
+        <div class="lrow-t" style="font-size:15px">${esc(l.content)}</div>
+        <div class="lrow-sub">${esc(l.plan)} · ${esc(l.at)}</div>
+      </div>
+      <span style="font-size:12.5px;color:var(--text-2)">${l.min} 分钟</span>
+    </div>`).join('');
+}
+
+document.getElementById('plans').addEventListener('click', e=>{
+  const b = e.target.closest('[data-plan]'); if(!b) return;
+  const p = S.plans.find(x=>x.id===b.dataset.plan);
+  p.weekDone = Math.min(p.weekTarget, p.weekDone+1);
+  save(); renderStudy();
+  toast(`已记录：${p.title} +1 次`);
+});
+
+/* ---------------- ME ---------------- */
+function renderMe(){
+  document.getElementById('me-stat').textContent = `已记录 ${recordedDays()} 天`;
+  document.getElementById('habit-manage').innerHTML = S.habits.map(h=>`
+    <div class="lrow indent">
+      <div class="app-ico" style="background:${h.color}"><svg class="ico"><use href="${ICON_MAP[h.icon]||'#i-sun'}"/></svg></div>
+      <div class="lrow-mid"><div class="lrow-t">${esc(h.name)}</div><div class="lrow-sub">${esc(h.target)}</div></div>
+      <button class="minus" data-mdel="${h.id}" aria-label="删除"><svg class="ico"><use href="#i-minus"/></svg></button>
+    </div>`).join('');
+}
+document.getElementById('habit-manage').addEventListener('click', e=>{
+  const del = e.target.closest('[data-mdel]');
+  if(del) removeHabit(del.dataset.mdel);
+});
+
+/* ---------------- MODAL ---------------- */
+function modal(html){
+  const root = document.getElementById('modal-root');
+  root.innerHTML = `<div class="mask" id="mask"><div class="sheet">${html}</div></div>`;
+  const mask = document.getElementById('mask');
+  requestAnimationFrame(()=>mask.classList.add('on'));
+  mask.addEventListener('click', e=>{ if(e.target===mask) closeModal(); });
+}
+function closeModal(){
+  const mask = document.getElementById('mask');
+  if(!mask) return;
+  mask.classList.remove('on');
+  setTimeout(()=>{ document.getElementById('modal-root').innerHTML=''; }, 240);
+}
+
+/* ---- add habit ---- */
+let pickIcon = 'sun', pickColor = HCOLORS[1];
+
+function openAddHabit(){
+  pickIcon = 'sun'; pickColor = HCOLORS[1];
+  modal(`
+    <div class="grabber"></div>
+    <div class="sheet-h"><h3>新建打卡项</h3>
+      <button class="link" onclick="closeModal()">取消</button>
+    </div>
+    <div class="field"><label>名称</label><input id="ah-name" placeholder="例如：喝水 8 杯" autocomplete="off"></div>
+    <div class="field"><label>频率</label>
+      <select id="ah-target">
+        <option>每天</option><option>工作日</option><option>周末</option>
+        <option>每周 3 次</option><option>每周 4 次</option><option>每周 5 次</option>
+      </select>
+    </div>
+    <div class="field"><label>图标</label>
+      <div class="picker" id="p-icon">${ICON_SET.map(k=>`
+        <button class="opt ${k===pickIcon?'on':''}" data-icon="${k}"><svg class="ico"><use href="${ICON_MAP[k]}"/></svg></button>`).join('')}</div>
+    </div>
+    <div class="field"><label>颜色</label>
+      <div class="picker" id="p-color">${HCOLORS.map(c=>`
+        <button class="opt color ${c===pickColor?'on':''}" data-color="${c}" style="background:${c}"></button>`).join('')}</div>
+    </div>
+    <button class="btn primary block" onclick="addHabit()">添加</button>
+    <div style="height:6px"></div>
+  `);
+  document.getElementById('p-icon').addEventListener('click', e=>{
+    const b = e.target.closest('[data-icon]'); if(!b) return;
+    pickIcon = b.dataset.icon;
+    document.querySelectorAll('#p-icon .opt').forEach(x=>x.classList.toggle('on', x===b));
+  });
+  document.getElementById('p-color').addEventListener('click', e=>{
+    const b = e.target.closest('[data-color]'); if(!b) return;
+    pickColor = b.dataset.color;
+    document.querySelectorAll('#p-color .opt').forEach(x=>x.classList.toggle('on', x===b));
+  });
+}
+
+function addHabit(){
+  const name = document.getElementById('ah-name').value.trim();
+  if(!name){ toast('给这一项起个名字'); return; }
+  const target = document.getElementById('ah-target').value;
+  S.habits.push({id:'h'+Date.now(), name, icon:pickIcon, color:pickColor, target});
+  save(); closeModal();
+  renderToday(); renderCalendar(); renderMe();
+  toast('已添加「' + name + '」');
+}
+
+/* ---- import from weread ---- */
+const IMPORT_SAMPLE = `反脆弱
+纳西姆·尼古拉斯·塔勒布
+
+风会熄灭蜡烛，却能使火越烧越旺。
+
+对随机性、不确定性和混沌也是一样：你要利用它们，而不是躲避它们。
+
+你越是试图控制，系统就越脆弱。
+
+如果一件事的失败不会让你出局，那它就值得尝试。`;
+
+function openAddMenu(){
+  modal(`
+    <div class="grabber"></div>
+    <div class="sheet-h"><h3>添加书籍</h3>
+      <button class="link" onclick="closeModal()">取消</button>
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <div class="lrow tap indent" onclick="openImport()">
+        <div class="app-ico" style="background:#34C759"><svg class="ico"><use href="#i-sync"/></svg></div>
+        <div class="lrow-mid"><div class="lrow-t">从微信读书导入</div><div class="lrow-sub">粘贴笔记，自动拆成书名与划线</div></div>
+        <svg class="ico" style="width:15px;height:15px;color:var(--text-3)"><use href="#i-right"/></svg>
+      </div>
+      <div class="lrow tap indent" onclick="openAddBook()">
+        <div class="app-ico" style="background:#007AFF"><svg class="ico"><use href="#i-plus"/></svg></div>
+        <div class="lrow-mid"><div class="lrow-t">手动添加</div><div class="lrow-sub">填入书名、作者与进度</div></div>
+        <svg class="ico" style="width:15px;height:15px;color:var(--text-3)"><use href="#i-right"/></svg>
+      </div>
+    </div>
+    <div style="height:6px"></div>
+  `);
+}
+
+function openImport(){
+  modal(`
+    <div class="grabber"></div>
+    <div class="sheet-h"><h3>从微信读书导入</h3>
+      <button class="link" onclick="closeModal()">取消</button>
+    </div>
+    <p class="sheet-p">微信读书 → 打开这本书 → 笔记页 → 分享/导出 → 复制全文，粘贴到这里。第一行是书名，第二行作者，之后每段作为一条划线。</p>
+    <div class="field"><textarea id="import-text" placeholder="粘贴导出的笔记内容…"></textarea></div>
+    <div style="display:flex;gap:9px">
+      <button class="btn" style="flex:none" onclick="fillSample()">填入示例</button>
+      <button class="btn primary" style="flex:1" onclick="doImport()">解析并导入</button>
+    </div>
+    <p class="sheet-p" style="margin:12px 0 0;font-size:11.5px;color:var(--text-3)">
+      正式版接微信读书官方 API Key 后，书架、进度与划线会直接同步，不用手动粘贴。
+    </p>
+  `);
+}
+
+function fillSample(){
+  const t = document.getElementById('import-text');
+  t.value = IMPORT_SAMPLE; t.focus();
+}
+
+function doImport(){
+  const raw = document.getElementById('import-text').value.trim();
+  if(!raw){ toast('先粘贴一点内容'); return; }
+  const lines = raw.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  const title = lines[0].replace(/^《|》$/g,'').slice(0,24);
+  const author = lines[1] && lines[1].length < 30 ? lines[1] : '未知作者';
+  const highlights = lines.slice(2).filter(l=>l.length>=6);
+
+  let b = S.books.find(x=>x.title===title);
+  if(!b){
+    const c = COVERS[S.books.length % COVERS.length];
+    b = {id:'b'+Date.now(), title, author, progress:8, status:'reading',
+         c1:c[0], c2:c[1], last:'刚刚', minutes:0};
+    S.books.unshift(b);
+  }
+  highlights.forEach((t,i)=>{
+    S.notes.unshift({id:'n'+Date.now()+'_'+i, book:title, text:t, at:'刚刚导入'});
+  });
+
+  save(); closeModal(); renderReading(); renderToday();
+  toast(`已导入《${title}》· ${highlights.length} 条划线`);
+}
+
+function openAddBook(){
+  modal(`
+    <div class="grabber"></div>
+    <div class="sheet-h"><h3>手动添加</h3>
+      <button class="link" onclick="closeModal()">取消</button>
+    </div>
+    <div class="field"><label>书名</label><input id="ab-title" placeholder="例如：聪明的投资者" autocomplete="off"></div>
+    <div class="field"><label>作者</label><input id="ab-author" placeholder="选填" autocomplete="off"></div>
+    <div class="field"><label>当前进度（%）</label><input id="ab-progress" type="number" value="0" min="0" max="100" inputmode="numeric"></div>
+    <button class="btn primary block" onclick="addBook()">添加</button>
+    <div style="height:6px"></div>
+  `);
+}
+
+function addBook(){
+  const t = document.getElementById('ab-title').value.trim();
+  if(!t){ toast('书名不能为空'); return; }
+  const a = document.getElementById('ab-author').value.trim() || '未知作者';
+  const p = Math.max(0, Math.min(100, Number(document.getElementById('ab-progress').value)||0));
+  const c = COVERS[S.books.length % COVERS.length];
+  S.books.unshift({id:'b'+Date.now(), title:t, author:a, progress:p,
+    status:p>=100?'done':'reading', c1:c[0], c2:c[1], last:'刚刚', minutes:0});
+  save(); closeModal(); renderReading(); renderToday();
+  toast('已添加《' + t + '》');
+}
+
+/* ---------------- theme ---------------- */
+function applyTheme(t, persist){
+  document.documentElement.dataset.theme = t;
+  const m = document.querySelector('meta[name="theme-color"]');
+  if(m) m.setAttribute('content', t === 'dark' ? '#000000' : '#F2F2F7');
+  const sw = document.getElementById('sw-theme');
+  if(sw) sw.classList.toggle('on', t === 'dark');
+  const sub = document.getElementById('theme-sub');
+  if(sub) sub.textContent = t === 'dark' ? '已开启' : '已关闭';
+  if(persist){ try{ localStorage.setItem('lifeboard.theme', t); }catch(e){} }
+}
+function toggleTheme(){
+  const cur = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(cur, true);
+  toast(cur === 'dark' ? '已切换到深色模式' : '已切换到浅色模式');
+}
+
+/* ---------------- boot ---------------- */
+function renderAll(){
+  renderToday(); renderCalendar(); renderReading(); renderStudy(); renderMe();
+}
+load();
+const dstr = `${TODAY.getMonth()+1} 月 ${TODAY.getDate()} 日 星期${'日一二三四五六'[TODAY.getDay()]}`;
+document.getElementById('pd-date').textContent = dstr;
+document.querySelectorAll('#seg button').forEach(x=>x.classList.toggle('on', x.dataset.f===(S.filter||'all')));
+renderAll();
+applyTheme(document.documentElement.dataset.theme || 'dark', false);
+</script>
+</body>
+</html>
