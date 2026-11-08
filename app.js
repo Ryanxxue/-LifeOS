@@ -650,12 +650,13 @@ function toggleTheme() {
 const TABS = [
   { k: 'today', n: '今日', i: 'home' },
   { k: 'calendar', n: '日历', i: 'calendar' },
-  { k: 'reading', n: '阅读', i: 'book' },
-  { k: 'study', n: '学习', i: 'pen' },
+  { k: 'library', n: '阅读·学习', i: 'book' },
   { k: 'trend', n: '趋势', i: 'chart' }
 ];
-const VIEWS = ['today', 'calendar', 'reading', 'study', 'trend', 'me'];
-const TITLES = { today: '今日', calendar: '日历', reading: '阅读', study: '学习', trend: '趋势', me: '我的' };
+const VIEWS = ['today', 'calendar', 'library', 'trend', 'me'];
+const TITLES = { today: '今日', calendar: '日历', library: '阅读与学习', trend: '趋势', me: '我的' };
+/* 旧版把阅读、学习拆成两页：离线快照 / 旧链接里的 view 值统一落到合并页 */
+const VIEW_ALIAS = { reading: 'library', study: 'library' };
 
 function renderChrome() {
   $('#tabbar').innerHTML = TABS.map(t =>
@@ -759,7 +760,7 @@ function renderToday() {
 
   if (reading.length) {
     html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
-      '<span>在读</span><button style="color:var(--blue);font-size:13.5px" data-act="tab" data-id="reading">全部</button></div>';
+      '<span>在读</span><button style="color:var(--blue);font-size:13.5px" data-act="tab" data-id="library">全部</button></div>';
     html += '<div class="card"><div class="rail">' + reading.map(b =>
       '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
       '<div class="bk-t">' + esc(b.title) + '</div><div class="bk-a">' + esc(b.author || '') + '</div></div>').join('') +
@@ -812,16 +813,46 @@ function levelOf(day) {
   return 1;
 }
 
+/* 运动记录：COROS 同步写入 activities，day 可能是 date 列返回的 ISO 串 */
+function activitiesForDay(day) {
+  return (S.activities || []).filter(a => String(a.day).slice(0, 10) === day);
+}
+const SPORT_NAMES = {
+  'indoor run': '室内跑步', 'outdoor run': '户外跑步', 'run': '跑步', 'trail run': '越野跑',
+  'indoor cycling': '室内骑行', 'cycling': '骑行', 'outdoor cycling': '户外骑行',
+  'pool swim': '泳池游泳', 'swimming': '游泳', 'open water swim': '公开水域游泳',
+  'hiking': '徒步', 'walking': '步行', 'strength': '力量训练', 'workout': '训练',
+  'yoga': '瑜伽', 'rowing': '划船', 'indoor row': '室内划船'
+};
+function sportName(a) {
+  const raw = String(a.name || a.type || '运动').trim();
+  return SPORT_NAMES[raw.toLowerCase()] || raw;
+}
+function activityRow(a) {
+  const bits = [];
+  const dur = Number(a.duration_sec), dist = Number(a.distance_m);
+  const hr = Number(a.avg_hr), kcal = Number(a.calories);
+  if (isFinite(dur) && dur > 0) bits.push(Math.round(dur / 60) + ' 分钟');
+  if (isFinite(dist) && dist > 0) bits.push((dist / 1000).toFixed(2) + ' km');
+  if (isFinite(hr) && hr > 0) bits.push('均心率 ' + Math.round(hr));
+  if (isFinite(kcal) && kcal > 0) bits.push(Math.round(kcal) + ' kcal');
+  return '<div class="lrow actrow" style="cursor:default">' +
+    '<div class="licon" style="background:var(--green)">' + icon('run', 17) + '</div>' +
+    '<div class="lbody"><div class="lrow-t">' + esc(sportName(a)) + '</div>' +
+    '<div class="lrow-sub">' + esc(bits.join(' · ') || '已同步') + '</div></div></div>';
+}
+
 function renderCalendar() {
   const m = S.calMonth;
   const y = m.getFullYear(), mo = m.getMonth();
   const first = new Date(y, mo, 1);
-  const start = addDays(first, -first.getDay());
+  const startDay = addDays(first, -first.getDay());
   const rows = Math.ceil((first.getDay() + new Date(y, mo + 1, 0).getDate()) / 7);
+  const actDays = new Set((S.activities || []).map(a => String(a.day).slice(0, 10)));
 
   let cells = '';
   for (let i = 0; i < rows * 7; i++) {
-    const d = addDays(start, i);
+    const d = addDays(startDay, i);
     const k = dayKey(d);
     const out = d.getMonth() !== mo;
     const lv = levelOf(k);
@@ -830,6 +861,7 @@ function renderCalendar() {
     if (lv) cls.push('l' + lv);
     if (k === TODAY()) cls.push('today');
     if (k === S.selDay) cls.push('sel');
+    if (!out && actDays.has(k)) cls.push('hasact');
     cells += '<div class="' + cls.join(' ') + '" data-act="calday" data-id="' + k + '">' + d.getDate() + '</div>';
   }
 
@@ -837,15 +869,18 @@ function renderCalendar() {
   for (let d = 1; d <= new Date(y, mo + 1, 0).getDate(); d++) monthDays.push(dayKey(new Date(y, mo, d)));
   const fullDays = monthDays.filter(k => levelOf(k) === 4).length;
   const anyDays = monthDays.filter(k => levelOf(k) > 0).length;
+  const monthActs = monthDays.reduce((n, k) => n + activitiesForDay(k).length, 0);
 
-  let html = '<div class="head"><div class="date">完成 ' + fullDays + ' 天 · 有记录 ' + anyDays + ' 天</div><h2>日历</h2></div>';
+  let html = '<div class="head"><div class="date">完成 ' + fullDays + ' 天 · 有记录 ' + anyDays +
+    ' 天 · 本月运动 ' + monthActs + ' 次</div><h2>日历</h2></div>';
 
   html += '<div class="cal"><div class="cal-top"><div class="m">' + y + ' 年 ' + (mo + 1) + ' 月</div>' +
     '<div class="cal-nav"><button data-act="calprev">' + icon('left', 17) + '</button>' +
     '<button data-act="calnext">' + icon('chev', 17) + '</button></div></div>' +
     '<div class="wk">' + WK.map(w => '<div>' + w + '</div>').join('') + '</div>' +
     '<div class="grid">' + cells + '</div>' +
-    '<div class="legend"><span>少</span><i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i>' +
+    '<div class="legend"><span class="lg-act"><i></i>运动</span><span>少</span>' +
+    '<i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i>' +
     '<i style="background:var(--heat-3)"></i><i style="background:var(--blue)"></i><span>多</span></div></div>';
 
   const sd = parseDay(S.selDay);
@@ -864,21 +899,40 @@ function renderCalendar() {
       '</div>').join('') + '</div>';
     html += '<div class="gfoot">点任意一项可补录或取消该天的记录。</div>';
   }
+
+  const acts = activitiesForDay(S.selDay);
+  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
+    '<span>运动记录 · ' + acts.length + ' 条</span>' +
+    '<button style="color:var(--blue);font-size:13.5px" data-act="corosSync">同步</button></div>';
+  html += acts.length
+    ? '<div class="card">' + acts.map(activityRow).join('') + '</div>'
+    : '<div class="card"><div class="empty" style="padding:22px 16px">这一天没有运动记录<br>' +
+      '<span style="font-size:12px">连接 COROS 后，运动会自动落到对应日期</span></div></div>';
+  html += '<div class="gfoot">日历右下角的绿点表示当天有运动记录。</div>';
+
   $('#view-calendar').innerHTML = html;
 }
 
-/* ==================== 阅读 ==================== */
+/* ==================== 阅读与学习（合并页） ==================== */
 function bookNotes(bookId) { return S.notes.filter(n => eqId(n.book_id, bookId) && !n.deleted_at); }
 
-function renderReading() {
+function renderLibrary() {
   const f = S.filter;
   const books = activeBooks();
   const list = books.filter(b => f === 'all' ? true : b.status === f);
   const reading = books.filter(b => b.status === 'reading');
+  const plans = activePlans();
+  const weekFrom = dayKey(weekStart(new Date()));
+  const weekLogs = S.logs.filter(l => String(l.day).slice(0, 10) >= weekFrom).length;
 
   let html = '<div class="head"><div class="date">共 ' + books.length + ' 本 · ' +
-    activeNotes().length + ' 条划线</div><h2>阅读</h2></div>';
+    activeNotes().length + ' 条划线 · ' + plans.length + ' 个计划 · 本周 ' + weekLogs +
+    ' 次记录</div><h2>阅读与学习</h2></div>';
 
+  /* ---- 书架 ---- */
+  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
+    '<span>书架 · ' + list.length + ' 本</span>' +
+    '<button style="color:var(--blue);font-size:13.5px" data-act="addbook">添加</button></div>';
   html += '<div class="seg">' +
     [['all', '全部'], ['reading', '在读'], ['done', '读完']].map(x =>
       '<button class="' + (f === x[0] ? 'on' : '') + '" data-act="filter" data-id="' + x[0] + '">' + x[1] + '</button>').join('') +
@@ -892,9 +946,6 @@ function renderReading() {
     }).join('') + '</div></div>';
   }
 
-  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
-    '<span>书架</span><button style="color:var(--blue);font-size:13.5px" data-act="addbook">添加</button></div>';
-
   if (!list.length) {
     html += '<div class="card"><div class="empty">书架还是空的。<br>可以从微信读书粘贴导入，也可以手动添加。</div>' +
       '<div class="addrow" data-act="addbook">' + icon('plus', 17) + '添加书籍</div></div>';
@@ -904,7 +955,48 @@ function renderReading() {
       '<div class="bk-t">' + esc(b.title) + '</div><div class="bk-a">' + esc(b.author || '') + '</div></div>').join('') + '</div>';
   }
 
-  $('#view-reading').innerHTML = html;
+  /* ---- 学习计划 ---- */
+  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
+    '<span>学习计划 · ' + plans.length + ' 个</span>' +
+    '<button style="color:var(--blue);font-size:13.5px" data-act="newplan">新建</button></div>';
+  if (!plans.length) {
+    html += '<div class="card"><div class="empty">还没有学习计划。<br>建一个，比如「每周读 3 次专业书」。</div>' +
+      '<div class="addrow" data-act="newplan">' + icon('plus', 17) + '新建计划</div></div>';
+  } else {
+    plans.forEach(p => {
+      const n = logsThisWeek(p.id).length;
+      const target = p.target_per_week || 3;
+      const pct = Math.min(100, Math.round(n / target * 100));
+      html += '<div class="plan"><div class="plan-top"><div>' +
+        '<div class="plan-t">' + esc(p.title) + '</div>' +
+        '<div class="plan-s">每周 ' + target + ' 次' + (p.total_weeks ? ' · 共 ' + p.total_weeks + ' 周' : '') + '</div>' +
+        '</div><div class="plan-pct">' + pct + '%</div></div>' +
+        '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+        '<div class="plan-foot"><div class="w">本周 ' + n + ' / ' + target + ' 次</div>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+        (loggedToday(p.id)
+          ? '<button class="pill" disabled style="opacity:.45">今天已记</button>'
+          : '<button class="pill" data-act="logstudy" data-id="' + p.id + '">记一次</button>') +
+        '<button class="pill" style="background:var(--fill);color:var(--text-2)" data-act="delplan" data-id="' + p.id + '">删除</button>' +
+        '</div></div></div>';
+    });
+    html += '<div class="card" style="margin-top:4px"><div class="addrow" data-act="newplan">' + icon('plus', 17) + '新建计划</div></div>';
+  }
+
+  const recent = S.logs.slice(0, 5);
+  if (recent.length) {
+    html += '<div class="gtitle">最近记录</div><div class="card">' + recent.map(l => {
+      const p = S.plans.find(x => eqId(x.id, l.plan_id));
+      const d = String(l.day).slice(0, 10);
+      const dd = parseDay(d);
+      return '<div class="lrow" style="cursor:default">' +
+        '<div class="licon" style="background:var(--blue)">' + icon('pen', 16) + '</div>' +
+        '<div class="lbody"><div class="lrow-t">' + esc(p ? p.title : '已删除的计划') + '</div>' +
+        '<div class="lrow-sub">' + (dd.getMonth() + 1) + '月' + dd.getDate() + '日</div></div></div>';
+    }).join('') + '</div>';
+  }
+
+  $('#view-library').innerHTML = html;
 }
 
 function openBook(id) {
@@ -940,55 +1032,11 @@ function openBook(id) {
   openSheet(html);
 }
 
-/* ==================== 学习 ==================== */
+/* ==================== 学习（工具函数，内容已并入阅读与学习页） ==================== */
 function weekStart(d) { const x = new Date(d); return addDays(x, -x.getDay()); }
 function logsThisWeek(planId) {
   const ws = dayKey(weekStart(new Date()));
   return S.logs.filter(l => eqId(l.plan_id, planId) && String(l.day).slice(0, 10) >= ws);
-}
-
-function renderStudy() {
-  const plans = activePlans();
-  let html = '<div class="head"><div class="date">' + plans.length + ' 个计划 · 本周 ' +
-    S.logs.filter(l => String(l.day).slice(0, 10) >= dayKey(weekStart(new Date()))).length + ' 次记录</div><h2>学习</h2></div>';
-
-  if (!plans.length) {
-    html += '<div class="card"><div class="empty">还没有学习计划。<br>建一个，比如「每周读 3 次专业书」。</div>' +
-      '<div class="addrow" data-act="newplan">' + icon('plus', 17) + '新建计划</div></div>';
-  } else {
-    plans.forEach(p => {
-      const n = logsThisWeek(p.id).length;
-      const target = p.target_per_week || 3;
-      const pct = Math.min(100, Math.round(n / target * 100));
-      html += '<div class="plan"><div class="plan-top"><div>' +
-        '<div class="plan-t">' + esc(p.title) + '</div>' +
-        '<div class="plan-s">每周 ' + target + ' 次' + (p.total_weeks ? ' · 共 ' + p.total_weeks + ' 周' : '') + '</div>' +
-        '</div><div class="plan-pct">' + pct + '%</div></div>' +
-        '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
-        '<div class="plan-foot"><div class="w">本周 ' + n + ' / ' + target + ' 次</div>' +
-        '<div style="display:flex;gap:8px;align-items:center">' +
-        (loggedToday(p.id)
-          ? '<button class="pill" disabled style="opacity:.45">今天已记</button>'
-          : '<button class="pill" data-act="logstudy" data-id="' + p.id + '">记一次</button>') +
-        '<button class="pill" style="background:var(--fill);color:var(--text-2)" data-act="delplan" data-id="' + p.id + '">删除</button>' +
-        '</div></div></div>';
-    });
-    html += '<div class="card" style="margin-top:4px"><div class="addrow" data-act="newplan">' + icon('plus', 17) + '新建计划</div></div>';
-  }
-
-  const recent = S.logs.slice(0, 8);
-  if (recent.length) {
-    html += '<div class="gtitle">最近记录</div><div class="card">' + recent.map(l => {
-      const p = S.plans.find(x => eqId(x.id, l.plan_id));
-      const d = String(l.day).slice(0, 10);
-      const dd = parseDay(d);
-      return '<div class="lrow" style="cursor:default">' +
-        '<div class="licon" style="background:var(--blue)">' + icon('pen', 16) + '</div>' +
-        '<div class="lbody"><div class="lrow-t">' + esc(p ? p.title : '已删除的计划') + '</div>' +
-        '<div class="lrow-sub">' + (dd.getMonth() + 1) + '月' + dd.getDate() + '日</div></div></div>';
-    }).join('') + '</div>';
-  }
-  $('#view-study').innerHTML = html;
 }
 
 /* ==================== 趋势 ==================== */
@@ -1236,14 +1284,15 @@ function renderMe() {
 /* ==================== 渲染调度 ==================== */
 function render() {
   if (!S.user) return;
+  if (VIEW_ALIAS[S.view]) S.view = VIEW_ALIAS[S.view];
   renderChrome();
-  const map = { today: renderToday, calendar: renderCalendar, reading: renderReading, study: renderStudy, trend: renderTrend, me: renderMe };
+  const map = { today: renderToday, calendar: renderCalendar, library: renderLibrary, trend: renderTrend, me: renderMe };
   VIEWS.forEach(k => { const el = $('#view-' + k); if (el) el.hidden = (S.view !== k); });
   (map[S.view] || renderToday)();
 }
 
 function go(view) {
-  S.view = view;
+  S.view = VIEW_ALIAS[view] || view;
   S.editing = false;
   render();
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
@@ -1822,7 +1871,8 @@ if (backupInput) backupInput.addEventListener('change', async function () {
 });
 
 window.LifeApp = {
-  S: S, loadAll: loadAll, render: render, toast: toast,
+  S: S, loadAll: loadAll, render: render, toast: toast, go: go,
+  activitiesForDay: activitiesForDay,
   openSheet: openSheet, closeSheet: closeSheet, enterApp: enterApp,
   openBook: openBook, getKv: kvGet, saveKv: kvSet,
   upsertHealth: upsertHealth, upsertActivity: upsertActivity,

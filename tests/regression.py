@@ -45,7 +45,12 @@ MOCK = r'''
       { id: 3, day: dayAt(-2), sleep_total: 8.0, hrv: 65 },
       { id: 4, day: dayAt(-1), sleep_total: 6.5, hrv: 50 }
     ],
-    activities: [],
+    activities: [
+      { id: 301, owner_id: 'u1', external_id: '481605761542160886', day: dayAt(-1) + 'T00:00:00Z',
+        type: '101', name: 'Indoor Run', duration_sec: 2699, distance_m: '10010.0', avg_hr: 173, calories: 531 },
+      { id: 302, owner_id: 'u1', external_id: '481518307420176485', day: dayAt(-1) + 'T00:00:00Z',
+        type: '101', name: 'Indoor Run', duration_sec: 1427, distance_m: '5000.0', avg_hr: 168, calories: 271 }
+    ],
     books: [
       { id: 11, owner_id: 'u1', title: '反脆弱', author: '塔勒布', status: 'reading', progress: 0, source: 'weread', created_at: '2024-01-01T00:00:00Z' }
     ],
@@ -171,12 +176,54 @@ TEST = r'''
     window.confirm = function () { window.__nativeConfirmCalled = (window.__nativeConfirmCalled || 0) + 1; return false; };
 
     ok('启动：登录态与今日页渲染', !!S.user && q1('#view-today').innerHTML.indexOf('今日打卡') >= 0);
+
+    /* --- 阅读与学习合并页 --- */
+    ok('合并页：底部 4 个标签且无独立阅读/学习入口',
+       document.querySelectorAll('#tabbar .tab').length === 4 &&
+       !q1('#tabbar [data-id="reading"]') && !q1('#tabbar [data-id="study"]') &&
+       !!q1('#tabbar [data-id="library"]'),
+       'tabs=' + document.querySelectorAll('#tabbar .tab').length);
+    goTab('library');
+    ok('合并页：书架与学习计划在同一页',
+       !q1('#view-library').hidden &&
+       !!q1('#view-library [data-act="openbook"]') &&
+       !!q1('#view-library [data-act="logstudy"]') &&
+       /阅读与学习|阅读·学习/.test(q1('#view-library').textContent));
+    ok('合并页：旧的阅读/学习独立容器已移除', !q1('#view-reading') && !q1('#view-study'));
+    window.LifeApp.go('reading');
+    ok('合并页：旧 view 别名 reading 落到 library', S.view === 'library');
+    window.LifeApp.go('study');
+    ok('合并页：旧 view 别名 study 落到 library', S.view === 'library');
+
+    /* --- 日历页运动记录 --- */
+    goTab('calendar');
+    ok('日历：有运动的日期带绿点标记',
+       !!q1('#view-calendar .cal-cell.hasact') &&
+       /本月运动 \d+ 次/.test(q1('#view-calendar').textContent));
+    const actDay = dayAt(-1);
+    const calCell = q1('#view-calendar [data-act="calday"][data-id="' + actDay + '"]');
+    if (calCell) calCell.click(); else { S.selDay = actDay; window.LifeApp.render(); }
+    await tick();
+    ok('日历：选中日展示 2 条运动明细',
+       q1('#view-calendar') && document.querySelectorAll('#view-calendar .actrow').length === 2,
+       'rows=' + document.querySelectorAll('#view-calendar .actrow').length);
+    ok('日历：运动字段换算与中文名正确',
+       /室内跑步/.test(q1('#view-calendar').textContent) &&
+       /45 分钟/.test(q1('#view-calendar').textContent) &&
+       /10\.01 km/.test(q1('#view-calendar').textContent) &&
+       /531 kcal/.test(q1('#view-calendar').textContent));
+    const noAct = dayAt(-2);
+    const noCell = q1('#view-calendar [data-act="calday"][data-id="' + noAct + '"]');
+    if (noCell) noCell.click(); else { S.selDay = noAct; window.LifeApp.render(); }
+    await tick();
+    ok('日历：无运动的日期给出空态',
+       /这一天没有运动记录/.test(q1('#view-calendar').textContent));
     ok('P0-1 状态主键已归一化为字符串', typeof S.books[0].id === 'string' && typeof S.habits[0].id === 'string',
        'book=' + typeof S.books[0].id + ' habit=' + typeof S.habits[0].id);
 
     /* --- P0-1：全部走真实 DOM 点击 --- */
-    goTab('reading');
-    const cover = q1('#view-reading [data-act="openbook"]');
+    goTab('library');
+    const cover = q1('#view-library [data-act="openbook"]');
     ok('P0-1 DOM 的 data-id 是字符串', !!cover && typeof cover.dataset.id === 'string', cover && cover.dataset.id);
     cover.click(); await tick();
     ok('P0-1 点击书籍封面能打开详情', q1('#mask').classList.contains('on') &&
@@ -204,8 +251,8 @@ TEST = r'''
     ok('P1-5 重复条数被明确报告', /跳过 2 条重复/.test(toastTxt), toastTxt);
 
     /* --- P0-1 + P2-5：删书走自定义确认弹层 --- */
-    goTab('reading');
-    q1('#view-reading [data-act="openbook"]').click(); await tick();
+    goTab('library');
+    q1('#view-library [data-act="openbook"]').click(); await tick();
     q1('#sheet [data-act="delbook"]').click(); await tick();
     ok('P2-5 自定义确认弹层出现且原生 confirm 未调用',
        q1('#confirm-mask').classList.contains('on') && !window.__nativeConfirmCalled,
@@ -259,13 +306,13 @@ TEST = r'''
     ok('P1-4 小样本不给强结论', /样本偏少/.test(trendTxt));
 
     /* --- P1-5：连点「记一次」 --- */
-    goTab('study');
-    const logBtn = q1('#view-study [data-act="logstudy"]');
+    goTab('library');
+    const logBtn = q1('#view-library [data-act="logstudy"]');
     logBtn.click(); logBtn.click();
     await tick();
     ok('P1-5 连点只产生 1 条学习记录', S.logs.length === 1 && store.study_logs.length === 1,
        'mem=' + S.logs.length + ' db=' + store.study_logs.length);
-    ok('P1-5 按钮变成「今天已记」', !!q1('#view-study .pill[disabled]'));
+    ok('P1-5 按钮变成「今天已记」', !!q1('#view-library .pill[disabled]'));
 
     /* --- P1-6：COROS 固定 schema / 单位白名单 / 失败报警 --- */
     const C = window.Coros;
@@ -350,7 +397,7 @@ TEST = r'''
     ok('P2-1 service worker 注册入口存在', typeof window.LifeApp.installSW === 'function');
 
     /* --- P2-5 5 tab + 设置入口 --- */
-    ok('P2-5 底部标签精简为 5 个', document.querySelectorAll('#tabbar .tab').length === 5);
+    ok('P2-5 阅读学习合并后底部标签为 4 个', document.querySelectorAll('#tabbar .tab').length === 4);
     q1('#btn-me').click(); await tick();
     ok('P2-5 右上角入口可进入「我的」', S.view === 'me' && !q1('#view-me').hidden);
     ok('P2-5 全站未调用原生 confirm', !window.__nativeConfirmCalled,
@@ -456,6 +503,12 @@ TEST = r'''
   window.LifeApp.closeSheet();
   // 带 #trend 打开时停在趋势页，便于单独截图复核视觉
   if (location.hash.indexOf('trend') >= 0) goTab('trend');
+  if (location.hash.indexOf('library') >= 0) goTab('library');
+  if (location.hash.indexOf('calendar') >= 0) {
+    goTab('calendar');
+    const c = q1('#view-calendar [data-act="calday"][data-id="' + dayAt(-1) + '"]');
+    if (c) c.click();
+  }
   if (location.hash.indexOf('confirm') >= 0) {
     window.LifeApp.askConfirm({ title: '删除这本书',
       message: '「反脆弱」及其划线会移入「最近删除」，可随时恢复。', okText: '删除' });
