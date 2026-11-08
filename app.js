@@ -21,11 +21,15 @@ const sid = v => (v === null || v === undefined || v === '') ? null : String(v);
 const eqId = (a, b) => a != null && b != null && String(a) === String(b);
 const dbId = v => { const n = Number(v); return isFinite(n) ? n : v; };
 
-let toastTimer = null;
-function toast(msg) {
+let toastTimer = null, pendingUndo = null;
+/* 高频删除走「撤销」而不是二次确认：toast 里带一个 6 秒内可点的撤销按钮 */
+function toast(msg, undoFn) {
   const t = $('#toast'); if (!t) return;
-  t.textContent = msg; t.classList.add('on');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 2200);
+  pendingUndo = (typeof undoFn === 'function') ? undoFn : null;
+  t.innerHTML = esc(msg) + (pendingUndo ? '<button class="undo" data-act="undo">撤销</button>' : '');
+  t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.classList.remove('on'); pendingUndo = null; }, pendingUndo ? 6000 : 2200);
 }
 
 /* ==================== 站点访问码 ==================== */
@@ -114,6 +118,9 @@ const S = {
   selDay: dayKey(new Date()),
   calMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
   range: 30,
+  chartMode: 'rate',
+  sparkField: null,
+  libSec: 'lib-books',
   loading: false,
   offline: false,
   snapshotAt: null
@@ -147,7 +154,14 @@ const P = {
   flame: '<path d="M12 21c3.6 0 6-2.4 6-5.6 0-4.2-4.4-5.4-4.4-9.4 0 0-2.6.8-2.6 4.2 0 1.4-1.2 2-2 1.2-.6-.6-.8-1.6-.8-1.6C6.6 11 6 13.2 6 15.4 6 18.6 8.4 21 12 21z"/>',
   scale: '<path d="M4.6 20.2V8.4M19.4 20.2V8.4"/><path d="M12 3.2v17"/><path d="M4.6 12.6h14.8"/>',
   moon: '<path d="M20.4 14.6A8.6 8.6 0 0 1 9.4 3.6a8.6 8.6 0 1 0 11 11z"/>',
-  up: '<path d="M12 19V5M6 11l6-6 6 6"/>'
+  up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  bike: '<circle cx="5.6" cy="17.2" r="3.3"/><circle cx="18.4" cy="17.2" r="3.3"/><path d="M5.6 17.2 10 8.8h4.4l4 8.4M9.2 8.8h4.6M12 17.2H9"/>',
+  swim: '<circle cx="16.2" cy="6.8" r="1.7"/><path d="M3 13.8c2.2-1.4 4.2-1.4 6.2 0s4 1.4 6.2 0 3.8-1.2 5.6-.2"/><path d="M4 18.4c2.2-1.4 4.2-1.4 6.2 0s4 1.4 6.2 0 3.4-1.1 4.8-.4"/><path d="M8 11 12.6 8.4l3.2 2.4"/>',
+  hike: '<path d="M3 20.4h18"/><path d="M4.4 20.4 9 9.6l3.2 5.2 2-2.6 5.4 8.2"/><circle cx="15.6" cy="5.2" r="1.6"/>',
+  walk: '<circle cx="13.2" cy="4.8" r="1.7"/><path d="M12 8.2 9.6 13l2.8 2 .6 5.2M9.6 13l-2.8 3.4M14.6 10.2l2.8 2.4"/>',
+  strength: '<path d="M4 10v4M6.6 8.4v7.2M17.4 8.4v7.2M20 10v4M6.6 12h10.8"/>',
+  yoga: '<circle cx="12" cy="4.8" r="1.8"/><path d="M12 8v5.6M12 10.4 6.4 8M12 10.4 17.6 8M12 13.6 7.4 18.4M12 13.6l4.6 4.8"/>',
+  row: '<path d="M3 15.6c3-1.3 5.6-1.3 8.4 0s5.6 1.3 9.6 0"/><path d="M5.4 12.4 12 8.6l6.6 3.8M12 8.6V4.2"/>'
 };
 function icon(name, size) {
   const d = P[name] || P.home;
@@ -274,11 +288,11 @@ function hasCheckins(day) {
   return !!(m && Object.keys(m).length);
 }
 
-async function toggleCheckin(habitId, day) {
+async function toggleCheckin(habitId, day, skipRender) {
   const on = isDone(habitId, day);
   const m = S.checkins[day] = S.checkins[day] || {};
   if (on) delete m[String(habitId)]; else m[String(habitId)] = true;
-  render();
+  if (!skipRender) render();
   try {
     if (on) {
       await q(DB.from('checkins').delete().eq('habit_id', dbId(habitId)).eq('day', day).select());
@@ -687,6 +701,261 @@ function ringHTML(pct, done, total) {
     '</svg><div class="val"><b>' + done + '</b><i>/ ' + total + '</i></div></div>';
 }
 
+/* ==================== 本轮优化：个人基线 / 洞察 / 运动类型 / 快速操作 ==================== */
+const SPORT_KIND = [
+  [/run|jog|跑/i, 'run'], [/cycl|bike|骑行|单车/i, 'bike'], [/swim|游泳/i, 'swim'],
+  [/hik|徒步|登山/i, 'hike'], [/walk|步行|快走/i, 'walk'],
+  [/strength|weight|力量|gym/i, 'strength'], [/yoga|瑜伽/i, 'yoga'], [/row|划船/i, 'row']
+];
+function sportKind(a) {
+  const raw = String(a.name || a.type || '');
+  for (const it of SPORT_KIND) if (it[0].test(raw)) return it[1];
+  return 'run';
+}
+function sportIcon(a, size) { return icon(sportKind(a), size || 14); }
+function dataSince() { return dayKey(addDays(new Date(), -400)); }
+
+const BASE_FIELDS = [
+  { f: 'sleep_total', label: '睡眠', unit: 'h', d: 1, good: 'high', low: '今天留意恢复。', high: '状态不错。' },
+  { f: 'hrv', label: 'HRV', unit: 'ms', d: 0, good: 'high', low: '适合把强度放低一点。', high: '恢复得不错。' },
+  { f: 'resting_hr', label: '静息心率', unit: 'bpm', d: 0, good: 'low', low: '恢复得不错。', high: '注意别安排高强度。' },
+  { f: 'training_load', label: '训练负荷', unit: '', d: 0, good: 'low', low: '还有余量。', high: '今天适合轻松一点。' }
+];
+function seriesBack(n, getter) {
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) out.push(getter(dayKey(addDays(new Date(), -i))));
+  return out;
+}
+function baselineOf(field, win) {
+  const vals = [];
+  for (let i = 1; i <= win; i++) {
+    const h = S.health[dayKey(addDays(new Date(), -i))];
+    const v = h ? num(h[field]) : null;
+    if (v !== null && isFinite(v)) vals.push(v);
+  }
+  if (vals.length < 3) return null;
+  return { avg: vals.reduce((a, b) => a + b, 0) / vals.length, n: vals.length };
+}
+function fieldDelta(field) {
+  const b = baselineOf(field, 7), h = S.health[TODAY()];
+  const v = h ? num(h[field]) : null;
+  if (!b || v === null) return null;
+  return { cur: v, base: b.avg, delta: v - b.avg, rel: b.avg ? (v - b.avg) / b.avg : 0, n: b.n };
+}
+function insightOf() {
+  const h = S.health[TODAY()];
+  if (!h) return { text: '还没有今天的身体数据。连接 COROS 后，这里会给出每日提示。', sub: '基于近 7 日个人基线', sync: true };
+  let best = null;
+  BASE_FIELDS.forEach(f => {
+    const d = fieldDelta(f.f);
+    if (d && Math.abs(d.rel) >= 0.08 && (!best || Math.abs(d.rel) > Math.abs(best.d.rel))) best = { f: f, d: d };
+  });
+  if (!best) return { text: '各项身体数据接近近 7 日常态，按今天的计划来就好。', sub: '基于近 7 日个人基线 · 仅作参考，不构成医学建议', sync: false };
+  const f = best.f, d = best.d, up = d.delta > 0;
+  const val = f.d ? (Math.round(d.cur * 10) / 10).toFixed(1) : String(Math.round(d.cur));
+  const diff = f.d ? (Math.round(Math.abs(d.delta) * 10) / 10).toFixed(1) : String(Math.round(Math.abs(d.delta)));
+  return {
+    text: f.label + ' ' + val + f.unit + '，比近 7 天' + (up ? '高 ' : '低 ') + diff + (f.unit || '') + '。' + (up ? f.high : f.low),
+    sub: '基于近 7 日个人基线（' + d.n + ' 天）· 仅作参考，不构成医学建议', sync: false
+  };
+}
+function sparkSVG(vals, color) {
+  const nn = vals.filter(v => v !== null && v !== undefined && isFinite(v));
+  if (nn.length < 2) return '<span class="gfoot">近 14 天数据不足，暂时画不出走势</span>';
+  const W = 240, H = 24, P = 2;
+  const lo = Math.min.apply(null, nn), hi = Math.max.apply(null, nn), span = (hi - lo) || 1;
+  let d = '', started = false;
+  vals.forEach(function (v, i) {
+    if (v === null || v === undefined || !isFinite(v)) { started = false; return; }
+    const x = P + (i / (vals.length - 1)) * (W - 2 * P);
+    const y = H - P - ((v - lo) / span) * (H - 2 * P);
+    d += (started ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+    started = true;
+  });
+  return '<svg class="sparkline" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="近 14 天走势">' +
+    '<path d="' + d.trim() + '" fill="none" stroke="' + (color || 'var(--blue)') + '" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+function avgMetric(getter, startBack, count) {
+  const vals = [];
+  for (let i = startBack; i < startBack + count; i++) {
+    const v = getter(dayKey(addDays(new Date(), -i)));
+    if (v !== null && v !== undefined && isFinite(v)) vals.push(v);
+  }
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+}
+function cmpHTML(cur, prev, n) {
+  if (cur === null || prev === null || !prev) return '<div class="cmp">暂无对比数据</div>';
+  const pct = (cur - prev) / Math.abs(prev) * 100;
+  if (Math.abs(pct) < 0.5) return '<div class="cmp">与前一个 ' + n + ' 天持平</div>';
+  return '<div class="cmp ' + (pct > 0 ? 'up' : 'down') + '">' + (pct > 0 ? '↑ ' : '↓ ') +
+    Math.abs(Math.round(pct)) + '% · 较前 ' + n + ' 天</div>';
+}
+function weekReview() {
+  const ws = weekStart(new Date());
+  const thisDays = [], prevDays = [];
+  for (let i = 0; i < 7; i++) {
+    const k = dayKey(addDays(ws, i));
+    if (k <= TODAY()) thisDays.push(k);
+  }
+  thisDays.forEach(k => prevDays.push(dayKey(addDays(parseDay(k), -7))));
+  const avgRate = ds => {
+    const v = ds.map(rateOfDay).filter(x => x !== null);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  const avgSleep = ds => {
+    const v = ds.map(d => { const h = S.health[d]; return h && h.sleep_total != null ? Number(h.sleep_total) : null; })
+      .filter(x => x !== null && isFinite(x));
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  const actN = ds => ds.reduce((n, d) => n + activitiesForDay(d).length, 0);
+  const logN = ds => S.logs.filter(l => ds.indexOf(String(l.day).slice(0, 10)) >= 0).length;
+  return [
+    { k: '打卡完成率', cur: avgRate(thisDays), prev: avgRate(prevDays), fmt: v => v === null ? '—' : Math.round(v * 100) + '%' },
+    { k: '平均睡眠', cur: avgSleep(thisDays), prev: avgSleep(prevDays), fmt: v => v === null ? '—' : fmt1(v) + 'h' },
+    { k: '运动次数', cur: actN(thisDays), prev: actN(prevDays), fmt: v => v + ' 次' },
+    { k: '学习记录', cur: logN(thisDays), prev: logN(prevDays), fmt: v => v + ' 次' }
+  ];
+}
+function reviewHTML() {
+  const monday = new Date().getDay() === 1;
+  let html = '<details class="review" id="week-review"' + (monday ? ' open' : '') + '>' +
+    '<summary>本周回顾 · 对比上周 <span class="rs">' + (monday ? '每周一自动展开' : '点此展开') + '</span></summary>' +
+    '<div class="review-body">';
+  weekReview().forEach(r => {
+    let delta = '—', cls = '';
+    if (r.cur !== null && r.prev !== null && r.prev !== 0) {
+      const pct = (r.cur - r.prev) / Math.abs(r.prev) * 100;
+      cls = pct > 0.5 ? 'up' : (pct < -0.5 ? 'down' : '');
+      delta = (pct > 0 ? '↑ ' : pct < 0 ? '↓ ' : '') + Math.abs(Math.round(pct)) + '%';
+    }
+    html += '<div class="rv-row"><span class="rk">' + r.k + '</span>' +
+      '<span class="rv">' + r.fmt(r.cur) + '</span>' +
+      '<span class="rp">上周 ' + r.fmt(r.prev) + '</span>' +
+      '<span class="rd ' + cls + '">' + delta + '</span></div>';
+  });
+  return html + '</div></details>';
+}
+const CORR_FIELDS = [
+  ['sleep_total', '睡眠时长'], ['hrv', 'HRV'], ['resting_hr', '静息心率'],
+  ['training_load', '训练负荷'], ['steps', '步数'], ['stress', '压力']
+];
+function factorInsights(days) {
+  return CORR_FIELDS.map(function (x) {
+    const pr = corrPairs(days, x[0]);
+    const r = pr.n >= 3 ? pearson(pr.xs, pr.ys) : null;
+    return { field: x[0], label: x[1], n: pr.n, r: r, p: r === null ? null : pValue(r, pr.n) };
+  }).sort((a, b) => Math.abs(b.r || 0) - Math.abs(a.r || 0));
+}
+function dataHealth() {
+  const last7 = seriesBack(7, d => d);
+  const cs = window.Coros ? Coros.status() : { connected: false };
+  return {
+    have: last7.filter(d => !!S.health[d]).length,
+    acts: last7.reduce((n, d) => n + activitiesForDay(d).length, 0),
+    connected: !!cs.connected, lastSync: cs.lastSync || null,
+    deleted: recentDeleted().length, snapshotAt: S.snapshotAt
+  };
+}
+function renderFreshness() {
+  const el = $('#fresh-bar'); if (!el) return;
+  if (S.offline || !S.snapshotAt) { el.hidden = true; return; }
+  const mins = Math.floor((Date.now() - new Date(S.snapshotAt).getTime()) / 60000);
+  if (mins < 60 || !isFinite(mins)) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = mins < 1440
+    ? '数据更新于 ' + Math.floor(mins / 60) + ' 小时前 · 重新打开可刷新'
+    : '数据更新于 ' + Math.floor(mins / 1440) + ' 天前 · 建议重新同步';
+}
+/* 打卡只更新被点的行与今日环形，不再整页重绘；失败回滚走 toggleCheckin 内的全量 render */
+function patchCheckinUI(habitId, day, actName) {
+  const row = document.querySelector('.lrow[data-act="' + actName + '"][data-id="' + habitId + '"]');
+  if (row) {
+    const on = isDone(habitId, day);
+    row.classList.toggle('done', on);
+    const chk = row.querySelector('.chk');
+    if (chk) { chk.classList.toggle('on', on); chk.innerHTML = on ? icon('check', 15) : ''; }
+    row.classList.remove('pop'); void row.offsetWidth; row.classList.add('pop');
+  }
+  const hero = $('#today-hero');
+  if (hero && day === TODAY()) {
+    const total = dayEntries(day), done = doneCount(day), pct = total ? done / total : 0;
+    const w = heroWords(pct);
+    hero.innerHTML = ringHTML(pct, done, total) +
+      '<div class="hero-txt"><div class="t">' + w[0] + '</div><div class="s">' + w[1] + '</div></div>';
+  }
+  const cp = $('#cal-progress');
+  if (cp) cp.textContent = '完成 ' + doneCount(day) + '/' + dayEntries(day);
+}
+function undoDelete(kind, id, label) {
+  return async function () {
+    await restoreRow(kind, id);          // restoreRow 内部会 render
+    if (kind === 'note' && S._openBook) openBook(S._openBook);
+    toast(label + '已恢复');
+  };
+}
+function swipeMonth(dir) {
+  S.calMonth = new Date(S.calMonth.getFullYear(), S.calMonth.getMonth() + dir, 1);
+  render();
+}
+function openCalJumpSheet() {
+  const nowY = new Date().getFullYear(), cy = S.calMonth.getFullYear(), cm = S.calMonth.getMonth() + 1;
+  let ys = '', ms = '';
+  for (let y = nowY - 5; y <= nowY + 1; y++) ys += '<option value="' + y + '"' + (y === cy ? ' selected' : '') + '>' + y + ' 年</option>';
+  for (let m = 1; m <= 12; m++) ms += '<option value="' + m + '"' + (m === cm ? ' selected' : '') + '>' + m + ' 月</option>';
+  openSheet('<div class="grabber"></div><div class="sheet-h"><div class="t">跳转到年月</div>' +
+    '<button data-act="closesheet">取消</button></div><div class="sheet-body">' +
+    '<div class="card" style="padding:14px;display:flex;gap:10px">' +
+    '<select id="cj-year" aria-label="年">' + ys + '</select>' +
+    '<select id="cj-month" aria-label="月">' + ms + '</select></div>' +
+    '<div style="margin-top:18px"><button class="btnblock blue" data-act="calgo">跳转</button></div></div>');
+}
+const QUICK_ACTS = [
+  { t: '新建打卡项', s: '添加一个每日习惯', i: 'plus', do: 'newhabit', q: '新建打卡项 习惯 habit' },
+  { t: '添加书籍', s: '微信读书导入或手动添加', i: 'book', do: 'addbook', q: '添加书籍 微信读书 weread' },
+  { t: '新建学习计划', s: '设定每周目标次数', i: 'pen', do: 'newplan', q: '新建学习计划 目标' },
+  { t: '记一次学习', s: '给第一个计划记一次', i: 'check', do: 'logfirst', q: '记一次 学习 记录' },
+  { t: '同步身体数据', s: '从 COROS 拉取近 7 天', i: 'refresh', do: 'corosSync', q: '同步 coros 身体数据 睡眠' },
+  { t: '回到今天', s: '日历跳回本月今天', i: 'calendar', do: 'caltoday', q: '回到今天 日历 本月' },
+  { t: '打开趋势', s: '查看近 30 天变化', i: 'chart', do: 'tab:trend', q: '趋势 图表 相关性' },
+  { t: '切换外观', s: '深色 / 浅色', i: 'moon', do: 'theme', q: '切换外观 深色 浅色 主题' }
+];
+function openQuickSheet() {
+  let html = '<div class="grabber"></div><div class="sheet-h"><div class="t">快速操作</div>' +
+    '<button data-act="closesheet">关闭</button></div><div class="sheet-body">' +
+    '<input class="quick-q" id="quick-q" type="text" placeholder="搜索动作…（⌘K / Ctrl+K）" aria-label="搜索动作">' +
+    '<div class="quick-hint">常用动作 · 输入关键词可过滤</div><div class="card" id="quick-list">';
+  QUICK_ACTS.forEach(a => {
+    html += '<button class="rowbtn" data-act="quickgo" data-do="' + a.do + '" data-q="' + esc(a.q) + '">' +
+      '<div class="icbox" style="background:var(--blue-soft);color:var(--blue)">' + icon(a.i, 17) + '</div>' +
+      '<div style="flex:1;min-width:0"><div class="rb-t">' + esc(a.t) + '</div>' +
+      '<div class="rb-s">' + esc(a.s) + '</div></div><div class="chev">' + icon('chev', 15) + '</div></button>';
+  });
+  html += '</div></div>';
+  openSheet(html);
+}
+async function runCorosSync() {
+  if (!window.Coros) return;
+  const st = Coros.status();
+  if (!st.connected) { toast('请先连接 COROS'); return; }
+  const btns = $$('[data-act="corosSync"]');
+  btns.forEach(b => { b.classList.add('busy'); b.setAttribute('disabled', ''); });
+  toast('正在同步…');
+  try {
+    const res = await Coros.sync();
+    try { await loadAll(); render(); }
+    catch (e) { toast('同步完成，但刷新数据失败：' + ((e && e.message) || '')); return; }
+    const w = (res && res.warnings) || [];
+    toast('已同步 ' + ((res && res.days) || 0) + ' 天身体数据、' +
+      ((res && res.activities) || 0) + ' 条运动' +
+      (w.length ? '，' + w.length + ' 处未识别，请查看同步诊断' : ''));
+  } catch (e) {
+    toast(e && e.soft ? e.message : 'COROS 同步失败：' + ((e && e.message) || '未知错误，请查看同步诊断'));
+  } finally {
+    btns.forEach(b => { b.classList.remove('busy'); b.removeAttribute('disabled'); });
+  }
+}
+
 /* ==================== 今日 ==================== */
 function heroWords(pct) {
   if (pct >= 1) return ['全部完成', '今天可以安心收工。'];
@@ -699,16 +968,36 @@ function heroWords(pct) {
 function healthCells(day) {
   const h = S.health[day] || {};
   const cells = [
-    { k: '睡眠', v: fmt1(num(h.sleep_total)), u: 'h' },
-    { k: 'HRV', v: h.hrv == null ? '—' : Math.round(h.hrv), u: 'ms' },
-    { k: '静息心率', v: h.resting_hr == null ? '—' : Math.round(h.resting_hr), u: 'bpm' },
-    { k: '训练负荷', v: h.training_load == null ? '—' : Math.round(h.training_load), u: '' }
+    { k: '睡眠', f: 'sleep_total', v: fmt1(num(h.sleep_total)), u: 'h' },
+    { k: 'HRV', f: 'hrv', v: h.hrv == null ? '—' : Math.round(h.hrv), u: 'ms' },
+    { k: '静息心率', f: 'resting_hr', v: h.resting_hr == null ? '—' : Math.round(h.resting_hr), u: 'bpm' },
+    { k: '训练负荷', f: 'training_load', v: h.training_load == null ? '—' : Math.round(h.training_load), u: '' }
   ];
-  return '<div class="health">' + cells.map(c =>
-    '<div class="hcell' + (c.v === '—' ? ' empty' : '') + '">' +
-    '<div class="k">' + c.k + '</div>' +
-    '<div class="v">' + c.v + (c.u && c.v !== '—' ? '<span class="u">' + c.u + '</span>' : '') + '</div></div>'
-  ).join('') + '</div>';
+  return '<div class="health">' + cells.map(c => {
+    const d = day === TODAY() ? fieldDelta(c.f) : null;
+    let dh = '';
+    if (d && c.v !== '—') {
+      const f = BASE_FIELDS.find(x => x.f === c.f) || BASE_FIELDS[0];
+      const up = d.delta > 0, good = (f.good === 'high') === up;
+      const abs = f.d ? (Math.round(Math.abs(d.delta) * 10) / 10).toFixed(1) : String(Math.round(Math.abs(d.delta)));
+      dh = '<div class="hdelta ' + (Math.abs(d.rel) < 0.08 ? '' : (good ? 'good' : 'warn')) + '">' +
+        (Math.abs(d.rel) < 0.08 ? '≈ 常态' : (up ? '↑ ' : '↓ ') + abs) + '</div>';
+    } else if (d) dh = '<div class="hdelta">基线数据不足</div>';
+    return '<div class="hcell' + (c.v === '—' ? ' empty' : '') + '" data-act="healthdetail" data-id="' + c.f + '" ' +
+      'role="button" tabindex="0" aria-label="' + c.k + ' ' + c.v + c.u + '">' +
+      '<div class="k">' + c.k + '</div>' +
+      '<div class="v">' + c.v + (c.u && c.v !== '—' ? '<span class="u">' + c.u + '</span>' : '') + '</div>' + dh + '</div>';
+  }).join('') + '</div>' + (S.sparkField ? sparkCardHTML(S.sparkField) : '');
+}
+function sparkCardHTML(field) {
+  const f = BASE_FIELDS.find(x => x.f === field) || BASE_FIELDS[0];
+  const vals = seriesBack(14, d => { const h = S.health[d]; return h ? num(h[field]) : null; });
+  const d = fieldDelta(field);
+  const base = d ? (f.d ? (Math.round(d.base * 10) / 10).toFixed(1) : String(Math.round(d.base))) + f.unit : '基线数据不足';
+  return '<div class="sparkcard" id="health-spark"><div class="sh"><span>' + f.label + ' · 近 14 天</span>' +
+    '<span>个人基线 ' + base + '</span></div>' +
+    sparkSVG(vals, field === 'hrv' ? 'var(--green)' : 'var(--blue)') +
+    '<div class="gfoot" style="margin-top:6px">断口表示当天没有数据；基线取近 7 天（不含今天）的平均值。</div></div>';
 }
 
 function habitRow(h, day, editing, actName) {
@@ -735,8 +1024,16 @@ function renderToday() {
   let html = '<div class="head"><div class="date">' + (d.getMonth() + 1) + '月' + d.getDate() + '日 周' + WK[d.getDay()] + '</div>' +
     '<h2>今日</h2></div>';
 
-  html += '<div class="hero">' + ringHTML(pct, done, total) +
+  html += reviewHTML();
+  html += '<div class="hero" id="today-hero">' + ringHTML(pct, done, total) +
     '<div class="hero-txt"><div class="t">' + w[0] + '</div><div class="s">' + w[1] + '</div></div></div>';
+
+  const ins = insightOf();
+  html += '<div class="insight" data-act="tab" data-id="' + (ins.sync ? 'me' : 'trend') + '" ' +
+    'role="button" tabindex="0" aria-label="查看身体数据详情">' +
+    '<div class="ii">' + icon('med', 16) + '</div>' +
+    '<div class="it">' + esc(ins.text) + '<div class="is">' + esc(ins.sub) + '</div></div>' +
+    '<div class="go">' + icon('chev', 15) + '</div></div>';
 
   html += healthCells(day);
   if (!h) {
@@ -772,8 +1069,8 @@ function renderToday() {
     const dstr = String(a.day).slice(0, 10);
     html += '<div class="gtitle">最近运动</div><div class="card">' +
       '<div class="lrow" style="cursor:default">' +
-      '<div class="licon" style="background:var(--green)">' + icon('run', 17) + '</div>' +
-      '<div class="lbody"><div class="lrow-t">' + esc(a.name || a.type || '运动') + '</div>' +
+      '<div class="licon" style="background:var(--green)">' + sportIcon(a, 17) + '</div>' +
+      '<div class="lbody"><div class="lrow-t">' + esc(sportName(a)) + '</div>' +
       '<div class="lrow-sub">' + dstr + (a.duration_sec ? ' · ' + Math.round(a.duration_sec / 60) + ' 分钟' : '') +
       (a.distance_m ? ' · ' + (a.distance_m / 1000).toFixed(2) + ' km' : '') + '</div></div></div></div>';
   }
@@ -837,7 +1134,7 @@ function activityRow(a) {
   if (isFinite(hr) && hr > 0) bits.push('均心率 ' + Math.round(hr));
   if (isFinite(kcal) && kcal > 0) bits.push(Math.round(kcal) + ' kcal');
   return '<div class="lrow actrow" style="cursor:default">' +
-    '<div class="licon" style="background:var(--green)">' + icon('run', 17) + '</div>' +
+    '<div class="licon" style="background:var(--green)" aria-label="' + esc(sportName(a)) + '">' + sportIcon(a, 17) + '</div>' +
     '<div class="lbody"><div class="lrow-t">' + esc(sportName(a)) + '</div>' +
     '<div class="lrow-sub">' + esc(bits.join(' · ') || '已同步') + '</div></div></div>';
 }
@@ -850,19 +1147,33 @@ function renderCalendar() {
   const rows = Math.ceil((first.getDay() + new Date(y, mo + 1, 0).getDate()) / 7);
   const actDays = new Set((S.activities || []).map(a => String(a.day).slice(0, 10)));
 
+  const since = dataSince();
   let cells = '';
   for (let i = 0; i < rows * 7; i++) {
     const d = addDays(startDay, i);
     const k = dayKey(d);
     const out = d.getMonth() !== mo;
     const lv = levelOf(k);
+    const acts = activitiesForDay(k);
+    const noData = k < since;
     const cls = ['cal-cell'];
     if (out) cls.push('out');
     if (lv) cls.push('l' + lv);
     if (k === TODAY()) cls.push('today');
     if (k === S.selDay) cls.push('sel');
     if (!out && actDays.has(k)) cls.push('hasact');
-    cells += '<div class="' + cls.join(' ') + '" data-act="calday" data-id="' + k + '">' + d.getDate() + '</div>';
+    if (noData) cls.push('nodata');
+    const rate = rateOfDay(k);
+    const aria = (d.getMonth() + 1) + '月' + d.getDate() + '日' +
+      (rate === null ? '' : '，完成率 ' + Math.round(rate * 100) + '%') +
+      (acts.length ? '，' + acts.length + ' 条运动' : '') +
+      (noData ? '，超出本地数据范围' : '');
+    cells += '<div class="' + cls.join(' ') + '" data-act="calday" data-id="' + k + '" ' +
+      'role="button" tabindex="0" aria-label="' + aria + '"' + (noData ? ' data-nodata="1"' : '') + '>' +
+      '<span class="cnum">' + d.getDate() + '</span>' +
+      (!out && acts.length
+        ? '<span class="act-badge">' + sportIcon(acts[0], 13) + (acts.length > 1 ? '<i>' + acts.length + '</i>' : '') + '</span>'
+        : '') + '</div>';
   }
 
   const monthDays = [];
@@ -874,19 +1185,24 @@ function renderCalendar() {
   let html = '<div class="head"><div class="date">完成 ' + fullDays + ' 天 · 有记录 ' + anyDays +
     ' 天 · 本月运动 ' + monthActs + ' 次</div><h2>日历</h2></div>';
 
-  html += '<div class="cal"><div class="cal-top"><div class="m">' + y + ' 年 ' + (mo + 1) + ' 月</div>' +
-    '<div class="cal-nav"><button data-act="calprev">' + icon('left', 17) + '</button>' +
-    '<button data-act="calnext">' + icon('chev', 17) + '</button></div></div>' +
+  html += '<div class="cal" id="cal-box"><div class="cal-top">' +
+    '<button class="m" data-act="caljump" aria-label="跳转到年月" ' +
+    'style="display:flex;align-items:center;gap:4px;font-size:16px;font-weight:500">' +
+    y + ' 年 ' + (mo + 1) + ' 月 ' + icon('chev', 13) + '</button>' +
+    '<div class="cal-nav">' +
+    '<button data-act="caltoday" aria-label="回到今天" style="width:auto;padding:0 10px;font-size:12px;border-radius:16px">今天</button>' +
+    '<button data-act="calprev" aria-label="上个月">' + icon('left', 17) + '</button>' +
+    '<button data-act="calnext" aria-label="下个月">' + icon('chev', 17) + '</button></div></div>' +
     '<div class="wk">' + WK.map(w => '<div>' + w + '</div>').join('') + '</div>' +
     '<div class="grid">' + cells + '</div>' +
-    '<div class="legend"><span class="lg-act"><i></i>运动</span><span>少</span>' +
+    '<div class="legend"><span class="lg-act">' + icon('run', 11) + '运动类型</span><span>少</span>' +
     '<i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i>' +
     '<i style="background:var(--heat-3)"></i><i style="background:var(--blue)"></i><span>多</span></div></div>';
 
   const sd = parseDay(S.selDay);
   const dn = doneCount(S.selDay);
   html += '<div class="gtitle">' + (sd.getMonth() + 1) + '月' + sd.getDate() + '日 周' + WK[sd.getDay()] +
-    ' · 完成 ' + dn + '/' + dayEntries(S.selDay) + '</div>';
+    ' · <span id="cal-progress">完成 ' + dn + '/' + dayEntries(S.selDay) + '</span></div>';
   if (!dayEntries(S.selDay)) {
     html += '<div class="card"><div class="empty">这一天还没有打卡项</div></div>';
   } else {
@@ -908,7 +1224,7 @@ function renderCalendar() {
     ? '<div class="card">' + acts.map(activityRow).join('') + '</div>'
     : '<div class="card"><div class="empty" style="padding:22px 16px">这一天没有运动记录<br>' +
       '<span style="font-size:12px">连接 COROS 后，运动会自动落到对应日期</span></div></div>';
-  html += '<div class="gfoot">日历右下角的绿点表示当天有运动记录。</div>';
+  html += '<div class="gfoot">日期下方的图标表示当天运动类型，多条时右侧数字是条数；点月份标题可跳转年月，左右滑动可翻月。</div>';
 
   $('#view-calendar').innerHTML = html;
 }
@@ -929,45 +1245,46 @@ function renderLibrary() {
     activeNotes().length + ' 条划线 · ' + plans.length + ' 个计划 · 本周 ' + weekLogs +
     ' 次记录</div><h2>阅读与学习</h2></div>';
 
-  /* ---- 书架 ---- */
-  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
+  html += '<div class="lib-nav"><div class="seg">' +
+    [['lib-books', '书架'], ['lib-plans', '计划'], ['lib-logs', '记录']].map(x =>
+      '<button data-act="libsec" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div></div>';
+
+  /* ---- 左列：书架 ---- */
+  let left = '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
     '<span>书架 · ' + list.length + ' 本</span>' +
     '<button style="color:var(--blue);font-size:13.5px" data-act="addbook">添加</button></div>';
-  html += '<div class="seg">' +
+  left += '<div class="seg">' +
     [['all', '全部'], ['reading', '在读'], ['done', '读完']].map(x =>
-      '<button class="' + (f === x[0] ? 'on' : '') + '" data-act="filter" data-id="' + x[0] + '">' + x[1] + '</button>').join('') +
-    '</div>';
-
+      '<button class="' + (f === x[0] ? 'on' : '') + '" data-act="filter" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div>';
   if (reading.length && f !== 'done') {
-    html += '<div class="gtitle">正在阅读</div><div class="card"><div class="rail">' + reading.map(b => {
+    left += '<div class="gtitle">正在阅读</div><div class="card"><div class="rail">' + reading.map(b => {
       const n = bookNotes(b.id).length;
       return '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
         '<div class="bk-t">' + esc(b.title) + '</div><div class="bk-a">' + (n ? n + ' 条划线' : esc(b.author || '')) + '</div></div>';
     }).join('') + '</div></div>';
   }
-
   if (!list.length) {
-    html += '<div class="card"><div class="empty">书架还是空的。<br>可以从微信读书粘贴导入，也可以手动添加。</div>' +
+    left += '<div class="card"><div class="empty">书架还是空的。<br>可以从微信读书粘贴导入，也可以手动添加；<br>点右上「+」→「添加书籍」即可开始。</div>' +
       '<div class="addrow" data-act="addbook">' + icon('plus', 17) + '添加书籍</div></div>';
   } else {
-    html += '<div class="shelf">' + list.map(b =>
+    left += '<div class="shelf">' + list.map(b =>
       '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
       '<div class="bk-t">' + esc(b.title) + '</div><div class="bk-a">' + esc(b.author || '') + '</div></div>').join('') + '</div>';
   }
 
-  /* ---- 学习计划 ---- */
-  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
+  /* ---- 右列：学习计划 ---- */
+  let planHtml = '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
     '<span>学习计划 · ' + plans.length + ' 个</span>' +
     '<button style="color:var(--blue);font-size:13.5px" data-act="newplan">新建</button></div>';
   if (!plans.length) {
-    html += '<div class="card"><div class="empty">还没有学习计划。<br>建一个，比如「每周读 3 次专业书」。</div>' +
+    planHtml += '<div class="card"><div class="empty">还没有学习计划。<br>建一个，比如「每周读 3 次专业书」。</div>' +
       '<div class="addrow" data-act="newplan">' + icon('plus', 17) + '新建计划</div></div>';
   } else {
     plans.forEach(p => {
       const n = logsThisWeek(p.id).length;
       const target = p.target_per_week || 3;
       const pct = Math.min(100, Math.round(n / target * 100));
-      html += '<div class="plan"><div class="plan-top"><div>' +
+      planHtml += '<div class="plan"><div class="plan-top"><div>' +
         '<div class="plan-t">' + esc(p.title) + '</div>' +
         '<div class="plan-s">每周 ' + target + ' 次' + (p.total_weeks ? ' · 共 ' + p.total_weeks + ' 周' : '') + '</div>' +
         '</div><div class="plan-pct">' + pct + '%</div></div>' +
@@ -980,21 +1297,30 @@ function renderLibrary() {
         '<button class="pill" style="background:var(--fill);color:var(--text-2)" data-act="delplan" data-id="' + p.id + '">删除</button>' +
         '</div></div></div>';
     });
-    html += '<div class="card" style="margin-top:4px"><div class="addrow" data-act="newplan">' + icon('plus', 17) + '新建计划</div></div>';
+    planHtml += '<div class="card" style="margin-top:4px"><div class="addrow" data-act="newplan">' +
+      icon('plus', 17) + '新建计划</div></div>';
   }
 
+  /* ---- 右列：最近记录 ---- */
+  let logsHtml = '<div class="gtitle">最近记录</div>';
   const recent = S.logs.slice(0, 5);
   if (recent.length) {
-    html += '<div class="gtitle">最近记录</div><div class="card">' + recent.map(l => {
+    logsHtml += '<div class="card">' + recent.map(l => {
       const p = S.plans.find(x => eqId(x.id, l.plan_id));
-      const d = String(l.day).slice(0, 10);
-      const dd = parseDay(d);
+      const d = String(l.day).slice(0, 10), dd = parseDay(d);
       return '<div class="lrow" style="cursor:default">' +
         '<div class="licon" style="background:var(--blue)">' + icon('pen', 16) + '</div>' +
         '<div class="lbody"><div class="lrow-t">' + esc(p ? p.title : '已删除的计划') + '</div>' +
         '<div class="lrow-sub">' + (dd.getMonth() + 1) + '月' + dd.getDate() + '日</div></div></div>';
     }).join('') + '</div>';
+  } else {
+    logsHtml += '<div class="card"><div class="empty" style="padding:22px 16px">还没有学习记录<br>' +
+      '<span style="font-size:12px">在上方计划点「记一次」，这里会按时间列出</span></div></div>';
   }
+
+  html += '<div class="lib-cols"><div class="lib-left" id="lib-books">' + left + '</div>' +
+    '<div class="lib-right"><div id="lib-plans">' + planHtml + '</div>' +
+    '<div id="lib-logs">' + logsHtml + '</div></div></div>';
 
   $('#view-library').innerHTML = html;
 }
@@ -1069,64 +1395,97 @@ function pValue(r, n) {
   return Math.max(0, Math.min(1, 2 * (1 - normCDF(Math.abs(z)))));
 }
 /* 睡眠是当晚的，配对「次日」完成率；无有效习惯或完全无打卡动作的次日按缺失剔除，不当 0 */
-function corrPairs(days) {
+function corrPairs(days, field) {
+  const f = field || 'sleep_total';
   const xs = [], ys = [];
   days.forEach(d => {
     const h = S.health[d];
-    if (!h || h.sleep_total == null) return;
-    const sleep = Number(h.sleep_total);
-    if (!isFinite(sleep) || sleep <= 0 || sleep > 16) return;
+    if (!h || h[f] == null) return;
+    const v = Number(h[f]);
+    if (!isFinite(v)) return;
+    if (f === 'sleep_total' && (v <= 0 || v > 16)) return;
     const next = dayKey(addDays(parseDay(d), 1));
     const rate = rateOfDay(next);
     if (rate === null || !hasCheckins(next)) return;
-    xs.push(sleep); ys.push(rate);
+    xs.push(v); ys.push(rate);
   });
   return { xs: xs, ys: ys, n: xs.length };
 }
 
-function chartSVG(days, lines) {
+function chartSVG(days, lines, opts) {
+  const o = opts || {};
   const W = 320, H = 132, PL = 8, PR = 8, PT = 10, PB = 18;
   const iw = W - PL - PR, ih = H - PT - PB;
   const n = days.length;
   const xAt = i => PL + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
-  let out = '<svg class="chartwrap" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" style="height:auto">';
+  let out = '<svg class="chartwrap" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" ' +
+    'style="height:auto" role="img" aria-label="趋势折线图">';
   for (let g = 0; g <= 3; g++) {
     const y = PT + (ih / 3) * g;
     out += '<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) + '" y2="' + y.toFixed(1) +
       '" stroke="var(--sep)" stroke-width=".6" stroke-dasharray="2 3"/>';
   }
-  lines.forEach(L => {
+  const annotYs = [];
+  lines.forEach((L, li) => {
     const vals = days.map(d => L.get(d));
     const vmax = L.max || 1, vmin = L.min || 0;
-    let path = '', started = false;
+    let path = '', started = false, last = null;
     vals.forEach((v, i) => {
       if (v === null) { started = false; return; }
       const y = PT + ih - ((Math.max(vmin, Math.min(vmax, v)) - vmin) / (vmax - vmin || 1)) * ih;
       const x = xAt(i);
       path += (started ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
       started = true;
+      last = { x: x, y: y, v: v };
     });
     if (path) out += '<path d="' + path.trim() + '" fill="none" style="stroke:' + L.color + '" stroke-width="2" ' +
       'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>';
+    if (o.direct !== false && last) {
+      const label = L.fmt ? L.fmt(last.v) : String(Math.round(last.v * 10) / 10);
+      /* 多线时保证标注之间至少 15px 间距，末端数值不再叠在一起 */
+      let ty = li === 0 ? Math.max(PT + 9, last.y - 8) : Math.min(H - PB - 2, last.y + 14);
+      annotYs.forEach(ay => { if (Math.abs(ty - ay) < 15) ty = Math.min(H - PB - 2, ay + 15); });
+      annotYs.push(ty);
+      out += '<circle cx="' + last.x.toFixed(1) + '" cy="' + last.y.toFixed(1) + '" r="2.6" fill="' + L.color + '"/>' +
+        '<text class="chart-current" x="' + Math.max(PL + 12, last.x - 4).toFixed(1) + '" y="' +
+        ty.toFixed(1) + '" font-size="10" font-weight="500" text-anchor="end" ' +
+        'fill="' + L.color + '">' + label + '</text>';
+    }
   });
-  const first = parseDay(days[0]), last = parseDay(days[n - 1]);
+  const first = parseDay(days[0]), lastDay = parseDay(days[n - 1]);
   out += '<text x="' + PL + '" y="' + (H - 4) + '" font-size="9" fill="var(--text-3)">' +
     (first.getMonth() + 1) + '/' + first.getDate() + '</text>';
   out += '<text x="' + (W - PR) + '" y="' + (H - 4) + '" font-size="9" fill="var(--text-3)" text-anchor="end">' +
-    (last.getMonth() + 1) + '/' + last.getDate() + '</text>';
+    (lastDay.getMonth() + 1) + '/' + lastDay.getDate() + '</text>';
+  if (o.hit) {
+    const step = n > 1 ? iw / (n - 1) : iw;
+    days.forEach((d, i) => {
+      const x = Math.max(0, xAt(i) - step / 2);
+      out += '<rect class="hit" x="' + x.toFixed(1) + '" y="0" width="' + Math.max(4, step).toFixed(1) +
+        '" height="' + H + '" fill="transparent" pointer-events="all" data-act="chartday" data-id="' + d +
+        '"><title>查看 ' + d + ' 的记录</title></rect>';
+    });
+  }
   out += '</svg>';
   return out;
 }
 
 function renderTrend() {
   const days = seriesDays(S.range);
-  const rates = days.map(rateOfDay).filter(v => v !== null);
-  const avgRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+  const rateGet = d => rateOfDay(d);
+  const sleepGet = d => { const h = S.health[d]; return h && h.sleep_total != null ? Number(h.sleep_total) : null; };
+  const hrvGet = d => { const h = S.health[d]; return h && h.hrv != null ? Number(h.hrv) : null; };
+  const rhrGet = d => { const h = S.health[d]; return h && h.resting_hr != null ? Number(h.resting_hr) : null; };
 
-  const hs = days.map(d => S.health[d]).filter(x => x && x.sleep_total != null);
-  const avgSleep = hs.length ? hs.reduce((a, b) => a + Number(b.sleep_total), 0) / hs.length : null;
-  const hrvs = days.map(d => S.health[d]).filter(x => x && x.hrv != null);
-  const avgHrv = hrvs.length ? hrvs.reduce((a, b) => a + Number(b.hrv), 0) / hrvs.length : null;
+  const rates = days.map(rateGet).filter(v => v !== null);
+  const avgRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+  const hs = days.map(sleepGet).filter(v => v !== null);
+  const avgSleep = hs.length ? hs.reduce((a, b) => a + b, 0) / hs.length : null;
+  const hrvs = days.map(hrvGet).filter(v => v !== null);
+  const avgHrv = hrvs.length ? hrvs.reduce((a, b) => a + b, 0) / hrvs.length : null;
+  const prevRate = avgMetric(rateGet, S.range, S.range);
+  const prevSleep = avgMetric(sleepGet, S.range, S.range);
+  const prevHrv = avgMetric(hrvGet, S.range, S.range);
 
   const pairs = corrPairs(days);
   const r = pairs.n >= 3 ? pearson(pairs.xs, pairs.ys) : null;
@@ -1137,24 +1496,43 @@ function renderTrend() {
   html += '<div class="seg">' + [30, 60, 90].map(n =>
     '<button class="' + (S.range === n ? 'on' : '') + '" data-act="range" data-id="' + n + '">' + n + ' 天</button>').join('') + '</div>';
 
-  html += '<div class="metric">' +
-    '<div class="mcell"><div class="k">打卡完成率</div><div class="v">' + (avgRate === null ? '—' : Math.round(avgRate * 100) + '<span style="font-size:15px">%</span>') + '</div>' +
-    '<div class="d">' + rates.length + ' 天有有效打卡项</div></div>' +
-    '<div class="mcell"><div class="k">平均睡眠</div><div class="v">' + (avgSleep === null ? '—' : fmt1(avgSleep)) + (avgSleep === null ? '' : '<span style="font-size:15px">h</span>') + '</div>' +
-    '<div class="d">' + hs.length + ' 天有数据</div></div>' +
-    '<div class="mcell wide"><div class="k">平均 HRV</div><div class="v">' + (avgHrv === null ? '—' : Math.round(avgHrv)) + (avgHrv === null ? '' : '<span style="font-size:15px">ms</span>') + '</div>' +
-    '<div class="d">' + hrvs.length + ' 天有数据</div></div>' +
-    '</div>';
+  const cards = [
+    { k: '打卡完成率', v: avgRate === null ? '—' : Math.round(avgRate * 100) + '<span style="font-size:15px">%</span>',
+      d: rates.length + ' 天有有效打卡项', cur: avgRate, prev: prevRate,
+      s: seriesBack(Math.min(S.range, 30), rateGet), c: 'var(--blue)' },
+    { k: '平均睡眠', v: avgSleep === null ? '—' : fmt1(avgSleep) + '<span style="font-size:15px">h</span>',
+      d: hs.length + ' 天有数据', cur: avgSleep, prev: prevSleep,
+      s: seriesBack(Math.min(S.range, 30), sleepGet), c: 'var(--orange)' },
+    { k: '平均 HRV', v: avgHrv === null ? '—' : String(Math.round(avgHrv)) + '<span style="font-size:15px">ms</span>',
+      d: hrvs.length + ' 天有数据', cur: avgHrv, prev: prevHrv,
+      s: seriesBack(Math.min(S.range, 30), hrvGet), c: 'var(--green)' }
+  ];
+  html += '<div class="metric">' + cards.map(c =>
+    '<div class="mcell"><div class="k">' + c.k + '</div><div class="v">' + c.v + '</div>' +
+    cmpHTML(c.cur, c.prev, S.range) + '<div class="spark">' + sparkSVG(c.s, c.c) + '</div>' +
+    '<div class="d">' + c.d + '</div></div>').join('') + '</div>';
 
-  html += '<div class="chartcard"><div class="chart-head"><div class="t">完成率与睡眠</div>' +
-    '<div class="lg"><span><i style="background:var(--blue)"></i>完成率</span><span><i style="background:var(--orange)"></i>睡眠(h)</span></div></div>' +
-    chartSVG(days, [
-      { get: d => rateOfDay(d), min: 0, max: 1, color: 'var(--blue)' },
-      { get: d => { const h = S.health[d]; return h && h.sleep_total != null ? Number(h.sleep_total) : null; }, min: 0, max: 10, color: 'var(--orange)' }
-    ]) + '</div><div class="gfoot" style="margin-left:6px">完成率按当日有效打卡项计算（0–100%），睡眠按 0–10 小时，各自缩放；断口表示当天没有数据。</div>';
+  const mode = S.chartMode || 'rate';
+  const rateLine = { get: rateGet, min: 0, max: 1, color: 'var(--blue)', fmt: v => Math.round(v * 100) + '%' };
+  const sleepLine = { get: sleepGet, min: 0, max: 10, color: 'var(--orange)', fmt: v => (Math.round(v * 10) / 10).toFixed(1) + 'h' };
+  html += '<div class="seg chart-seg" style="margin-top:12px">' +
+    [['rate', '完成率'], ['sleep', '睡眠'], ['both', '叠加']].map(x =>
+      '<button class="' + (mode === x[0] ? 'on' : '') + '" data-act="chartmode" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div>';
 
-  const rhrs = days.map(d => S.health[d]).filter(x => x && x.resting_hr != null);
-  const pool = hrvs.map(x => Number(x.hrv)).concat(rhrs.map(x => Number(x.resting_hr)));
+  const lines1 = mode === 'both' ? [rateLine, sleepLine] : (mode === 'sleep' ? [sleepLine] : [rateLine]);
+  const title1 = mode === 'both' ? '完成率与睡眠' : (mode === 'sleep' ? '睡眠时长' : '打卡完成率');
+  const lg1 = mode === 'both'
+    ? '<span><i style="background:var(--blue)"></i>完成率</span><span><i style="background:var(--orange)"></i>睡眠(h)</span>'
+    : (mode === 'sleep' ? '<span><i style="background:var(--orange)"></i>睡眠(h)</span>'
+                        : '<span><i style="background:var(--blue)"></i>完成率</span>');
+  html += '<div class="chartcard"><div class="chart-head"><div class="t">' + title1 + '</div>' +
+    '<div class="lg">' + lg1 + '</div></div>' + chartSVG(days, lines1, { hit: true }) + '</div>' +
+    '<div class="gfoot" style="margin-left:6px">' +
+    (mode === 'both' ? '完成率按当日有效打卡项计算（0–100%），睡眠按 0–10 小时，各自缩放；' : '单一指标，纵轴为该指标本身；') +
+    '断口表示当天没有数据。末端数字为当前值，点按图表任意日期可跳到当天记录。</div>';
+
+  const rhrs = days.map(rhrGet).filter(v => v !== null);
+  const pool = hrvs.map(Number).concat(rhrs.map(Number));
   let lo = pool.length ? Math.min.apply(null, pool) : 40;
   let hi = pool.length ? Math.max.apply(null, pool) : 100;
   const padV = Math.max(3, (hi - lo) * 0.18);
@@ -1163,9 +1541,9 @@ function renderTrend() {
   html += '<div class="chartcard"><div class="chart-head"><div class="t">HRV 与静息心率</div>' +
     '<div class="lg"><span><i style="background:var(--green)"></i>HRV</span><span><i style="background:var(--pink)"></i>心率</span></div></div>' +
     chartSVG(days, [
-      { get: d => { const h = S.health[d]; return h && h.hrv != null ? Number(h.hrv) : null; }, min: lo, max: hi, color: 'var(--green)' },
-      { get: d => { const h = S.health[d]; return h && h.resting_hr != null ? Number(h.resting_hr) : null; }, min: lo, max: hi, color: 'var(--pink)' }
-    ]) + '</div><div class="gfoot" style="margin-left:6px">两条线共用同一纵轴范围（' + lo + '–' + hi + '），断口表示当天没有数据。</div>';
+      { get: hrvGet, min: lo, max: hi, color: 'var(--green)', fmt: v => String(Math.round(v)) },
+      { get: rhrGet, min: lo, max: hi, color: 'var(--pink)', fmt: v => String(Math.round(v)) }
+    ], { hit: true }) + '</div><div class="gfoot" style="margin-left:6px">两条线共用同一纵轴范围（' + lo + '–' + hi + '），断口表示当天没有数据。</div>';
 
   let corr;
   if (r === null) {
@@ -1187,7 +1565,21 @@ function renderTrend() {
       (p === null ? '—' : p.toFixed(3)) + '</div></div>' +
       '<div style="font-size:13px;color:var(--text-2);line-height:1.65;margin-top:8px">' + verdict + '</div>';
   }
-  html += '<div class="gtitle">睡眠与次日完成率的关系</div><div class="card" style="padding:16px">' + corr +
+  let extra;
+  if (pairs.n < 8) {
+    extra = '<div style="margin-top:14px;border-top:.5px solid var(--sep);padding-top:12px">' +
+      '<div style="font-size:12.5px;color:var(--text-2)">再积累 ' + (8 - pairs.n) + ' 天配对数据即可查看多因子关联（当前 n=' + pairs.n + '/8）</div>' +
+      '<div class="bar" style="margin:8px 0 0"><i style="width:' + Math.min(100, Math.round(pairs.n / 8 * 100)) + '%"></i></div></div>';
+  } else {
+    extra = '<div style="margin-top:14px;border-top:.5px solid var(--sep);padding-top:10px">' +
+      '<div style="font-size:12px;color:var(--text-2);margin-bottom:6px">多因子探索（按 |r| 排序）</div>' +
+      factorInsights(days).map(x => '<div class="lrow" style="cursor:default;padding:8px 0">' +
+        '<div class="lbody"><div class="lrow-t" style="font-size:13px">' + x.label + '</div>' +
+        '<div class="lrow-sub">n=' + x.n + ' · r=' + (x.r === null ? '—' : (x.r >= 0 ? '+' : '') + x.r.toFixed(2)) +
+        ' · p=' + (x.p === null ? '—' : x.p.toFixed(3)) + '</div></div></div>').join('') +
+      '<div class="gfoot" style="margin-top:6px">探索性分析，未做多重比较校正；相关不代表因果。</div></div>';
+  }
+  html += '<div class="gtitle">睡眠与次日完成率的关系</div><div class="card" style="padding:16px">' + corr + extra +
     '</div><div class="gfoot">口径：睡眠取当晚，完成率取次日；仅纳入有睡眠数据且次日有有效打卡项、有打卡动作的日子。相关不等于因果。</div>';
 
   $('#view-trend').innerHTML = html;
@@ -1210,6 +1602,17 @@ function renderMe() {
     '<div style="flex:1;min-width:0"><div class="rb-t">复制访问链接</div>' +
     '<div class="rb-s">在另一台设备打开即可登录同一账号</div></div>' +
     '<div class="chev">' + icon('chev', 15) + '</div></button></div>';
+
+  const dh = dataHealth();
+  html += '<div class="gtitle">数据健康</div><div class="card data-health" id="data-health">' +
+    '<div class="dh-title">近 7 天身体数据 ' + dh.have + '/7 天</div>' +
+    '<div class="dh-bar"><i style="width:' + Math.round(dh.have / 7 * 100) + '%"></i></div>' +
+    '<div class="dh-row"><span class="dk">COROS 连接</span><span class="dv">' + (dh.connected ? '已连接' : '未连接') + '</span></div>' +
+    '<div class="dh-row"><span class="dk">上次同步</span><span class="dv">' + esc(dh.lastSync || '尚无记录') + '</span></div>' +
+    '<div class="dh-row"><span class="dk">近 7 天运动</span><span class="dv">' + dh.acts + ' 次</span></div>' +
+    '<div class="dh-row"><span class="dk">缺失身体数据</span><span class="dv">' + (7 - dh.have) + ' 天</span></div>' +
+    '<div class="dh-row"><span class="dk">最近删除可恢复</span><span class="dv">' + dh.deleted + ' 项</span></div>' +
+    '</div>';
 
   html += '<div class="gtitle">数据连接</div><div class="card">' +
     '<button class="rowbtn" data-act="corosConnect">' +
@@ -1286,6 +1689,7 @@ function render() {
   if (!S.user) return;
   if (VIEW_ALIAS[S.view]) S.view = VIEW_ALIAS[S.view];
   renderChrome();
+  renderFreshness();
   const map = { today: renderToday, calendar: renderCalendar, library: renderLibrary, trend: renderTrend, me: renderMe };
   VIEWS.forEach(k => { const el = $('#view-' + k); if (el) el.hidden = (S.view !== k); });
   (map[S.view] || renderToday)();
@@ -1332,7 +1736,7 @@ function askConfirm(opts) {
 /* 离线时禁止一切写库 / 授权动作，只保留浏览与导出 */
 const WRITE_ACTS = new Set(['toggle', 'daytoggle', 'savehabit', 'delhabit', 'savemanualbook',
   'delnote', 'delbook', 'togglebookstatus', 'saveplan', 'logstudy', 'delplan', 'doimport',
-  'corosConnect', 'corosSync', 'restore', 'importbackup']);
+  'corosConnect', 'corosSync', 'restore', 'importbackup', 'undo']);
 
 /* ==================== 新建/编辑打卡项 ==================== */
 const ICON_CHOICES = ['sun', 'book', 'run', 'med', 'pen', 'drop', 'bed', 'heart', 'flame', 'scale'];
@@ -1512,20 +1916,79 @@ document.addEventListener('click', async function (ev) {
     case 'tab': go(id); break;
     case 'filter': S.filter = id; render(); break;
     case 'range': S.range = parseInt(id, 10) || 30; render(); break;
-    case 'theme': toggleTheme(); renderMe(); break;
+    case 'theme': toggleTheme(); render(); break;
+    case 'chartmode': S.chartMode = id; render(); break;
+    case 'healthdetail': S.sparkField = (S.sparkField === eid ? null : eid); render(); break;
+
+    case 'quick': openQuickSheet(); break;
+    case 'quickgo': {
+      const doIt = el.getAttribute('data-do');
+      if (S.offline && ['newhabit', 'addbook', 'newplan', 'logfirst', 'corosSync'].indexOf(doIt) >= 0) {
+        toast('离线中，请联网后再操作'); break;
+      }
+      closeSheet();
+      if (doIt === 'newhabit') openHabitSheet(null);
+      else if (doIt === 'addbook') openAddBookSheet();
+      else if (doIt === 'newplan') openPlanSheet();
+      else if (doIt === 'logfirst') {
+        const p = activePlans()[0];
+        if (p) await logStudy(p.id); else toast('还没有学习计划');
+      }
+      else if (doIt === 'corosSync') await runCorosSync();
+      else if (doIt === 'caltoday') {
+        S.calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+        S.selDay = TODAY(); go('calendar');
+      }
+      else if (doIt === 'theme') { toggleTheme(); render(); }
+      else if (doIt.indexOf('tab:') === 0) go(doIt.slice(4));
+      break;
+    }
+    case 'undo': {
+      const f = pendingUndo; pendingUndo = null;
+      if (f) { try { await f(); } catch (e) { toast('撤销失败：' + ((e && e.message) || '')); } }
+      break;
+    }
 
     case 'toggle':
       if (S.editing) break;
-      await toggleCheckin(eid, day || TODAY());
+      await toggleCheckin(eid, day || TODAY(), true);
+      patchCheckinUI(eid, day || TODAY(), 'toggle');
       break;
     case 'daytoggle':
-      await toggleCheckin(eid, day || S.selDay);
+      await toggleCheckin(eid, day || S.selDay, true);
+      patchCheckinUI(eid, day || S.selDay, 'daytoggle');
       break;
     case 'edittoggle': S.editing = !S.editing; render(); break;
 
-    case 'calprev': S.calMonth = new Date(S.calMonth.getFullYear(), S.calMonth.getMonth() - 1, 1); render(); break;
-    case 'calnext': S.calMonth = new Date(S.calMonth.getFullYear(), S.calMonth.getMonth() + 1, 1); render(); break;
-    case 'calday': S.selDay = id; render(); break;
+    case 'calprev': swipeMonth(-1); break;
+    case 'calnext': swipeMonth(1); break;
+    case 'caltoday':
+      S.calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      S.selDay = TODAY(); render(); break;
+    case 'caljump': openCalJumpSheet(); break;
+    case 'calgo': {
+      const y = parseInt(($('#cj-year') && $('#cj-year').value) || String(new Date().getFullYear()), 10);
+      const m = parseInt(($('#cj-month') && $('#cj-month').value) || '1', 10);
+      S.calMonth = new Date(y, m - 1, 1);
+      S.selDay = dayKey(new Date(y, m - 1, 1));
+      closeSheet(); render(); break;
+    }
+    case 'calday':
+      if (el.hasAttribute('data-nodata')) { toast('该日期早于本地数据范围（近 400 天）'); break; }
+      S.selDay = id; render(); break;
+    case 'chartday': {
+      const d = parseDay(id);
+      S.selDay = id;
+      S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+      go('calendar'); break;
+    }
+    case 'libsec': {
+      S.libSec = id;
+      $$('.lib-nav button').forEach(b => b.classList.toggle('on', b.getAttribute('data-id') === id));
+      const t = document.getElementById(id);
+      if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      break;
+    }
 
     case 'newhabit': openHabitSheet(null); break;
     case 'savehabit': await submitHabit(eid || null); break;
@@ -1536,7 +1999,8 @@ document.addEventListener('click', async function (ev) {
         message: '删除「' + (h ? h.name : '') + '」？历史打卡记录会保留，用于计算完成率。',
         okText: '删除'
       }))) break;
-      try { await removeHabit(eid); toast('已删除'); } catch (e) { toast('删除失败：' + (e.message || '')); }
+      try { await removeHabit(eid); toast('已删除', undoDelete('habit', eid, '打卡项')); }
+      catch (e) { toast('删除失败：' + (e.message || '')); }
       break;
     }
 
@@ -1549,7 +2013,7 @@ document.addEventListener('click', async function (ev) {
       try {
         await removeNote(eid);
         if (S._openBook) openBook(S._openBook); else closeSheet();
-        toast('已删除');
+        toast('已删除划线', undoDelete('note', eid, '划线'));
       } catch (e) { toast('删除失败：' + (e.message || '')); }
       break;
     }
@@ -1560,7 +2024,7 @@ document.addEventListener('click', async function (ev) {
         message: '「' + (b ? b.title : '') + '」及其划线会移入「最近删除」，可随时恢复。',
         okText: '删除'
       }))) break;
-      try { await removeBook(eid); closeSheet(); toast('已删除'); }
+      try { await removeBook(eid); closeSheet(); toast('已删除', undoDelete('book', eid, '书籍')); }
       catch (e) { toast('删除失败：' + (e.message || '')); }
       break;
     }
@@ -1580,10 +2044,8 @@ document.addEventListener('click', async function (ev) {
       try { await logStudy(eid); } catch (e) { toast('记录失败：' + (e.message || '')); }
       break;
     case 'delplan': {
-      if (!(await askConfirm({
-        title: '删除学习计划', message: '计划会移入「最近删除」，历史记录保留。', okText: '删除'
-      }))) break;
-      try { await removePlan(eid); toast('已删除'); } catch (e) { toast('删除失败：' + (e.message || '')); }
+      try { await removePlan(eid); toast('已删除计划', undoDelete('plan', eid, '计划')); }
+      catch (e) { toast('删除失败：' + (e.message || '')); }
       break;
     }
 
@@ -1598,27 +2060,7 @@ document.addEventListener('click', async function (ev) {
     case 'corosConnect':
       if (window.Coros) await Coros.connect();
       break;
-    case 'corosSync': {
-      if (!window.Coros) break;
-      const st = Coros.status();
-      if (!st.connected) { toast('请先连接 COROS'); break; }
-      toast('正在同步…');
-      let res;
-      try { res = await Coros.sync(); }
-      catch (e) {
-        toast(e && e.soft ? e.message
-          : 'COROS 同步失败：' + ((e && e.message) || '未知错误，请查看同步诊断'));
-        break;
-      }
-      // 同步与刷新是两回事：刷新失败不能误报成同步失败
-      try { await loadAll(); render(); }
-      catch (e) { toast('同步完成，但刷新数据失败：' + ((e && e.message) || '')); break; }
-      const w = (res && res.warnings) || [];
-      toast('已同步 ' + ((res && res.days) || 0) + ' 天身体数据、' +
-        ((res && res.activities) || 0) + ' 条运动' +
-        (w.length ? '，' + w.length + ' 处未识别，请查看同步诊断' : ''));
-      break;
-    }
+    case 'corosSync': await runCorosSync(); break;
     case 'corosDiag': {
       const w = (window.Coros && typeof Coros.warnings === 'function') ? Coros.warnings() : [];
       const diag = (window.Coros && typeof Coros.diagnostics === 'function') ? await Coros.diagnostics() : null;
@@ -1870,6 +2312,42 @@ if (backupInput) backupInput.addEventListener('change', async function () {
   this.value = '';
 });
 
+/* ---------- 键盘 / 触摸 / 快速搜索 ---------- */
+document.addEventListener('keydown', function (e) {
+  const k = String(e.key || '').toLowerCase();
+  if ((e.metaKey || e.ctrlKey) && k === 'k') {
+    e.preventDefault(); openQuickSheet();
+    setTimeout(function () { const i = $('#quick-q'); if (i) i.focus(); }, 40);
+    return;
+  }
+  if (k === 'escape' && $('#mask').classList.contains('on')) { closeSheet(); return; }
+  if ((k === 'enter' || k === ' ') && e.target && e.target.classList &&
+      e.target.classList.contains('cal-cell')) {
+    e.preventDefault(); e.target.click();
+  }
+});
+document.addEventListener('input', function (e) {
+  if (!e.target || e.target.id !== 'quick-q') return;
+  const v = String(e.target.value || '').trim().toLowerCase();
+  $$('#quick-list .rowbtn').forEach(b => {
+    b.hidden = !!v && String(b.dataset.q || '').toLowerCase().indexOf(v) < 0;
+  });
+});
+let touchStart = null;
+document.addEventListener('touchstart', function (e) {
+  const t = e.touches && e.touches[0];
+  touchStart = (t && e.target.closest && e.target.closest('#cal-box'))
+    ? { x: t.clientX, y: t.clientY } : null;
+}, { passive: true });
+document.addEventListener('touchend', function (e) {
+  if (!touchStart) return;
+  const t = e.changedTouches && e.changedTouches[0], st = touchStart;
+  touchStart = null;
+  if (!t) return;
+  const dx = t.clientX - st.x, dy = t.clientY - st.y;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) swipeMonth(dx < 0 ? 1 : -1);
+}, { passive: true });
+
 window.LifeApp = {
   S: S, loadAll: loadAll, render: render, toast: toast, go: go,
   activitiesForDay: activitiesForDay,
@@ -1883,7 +2361,13 @@ window.LifeApp = {
   recentDeleted: recentDeleted, openTrashSheet: openTrashSheet, restoreRow: restoreRow,
   exportBackup: exportBackup, restoreBackup: restoreBackup, fetchBackupRows: fetchBackupRows,
   askConfirm: askConfirm, renderSkeleton: renderSkeleton,
-  readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW
+  readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,
+  sportKind: sportKind, sportIcon: sportIcon, insightOf: insightOf, baselineOf: baselineOf,
+  fieldDelta: fieldDelta, sparkSVG: sparkSVG, cmpHTML: cmpHTML, avgMetric: avgMetric,
+  weekReview: weekReview, factorInsights: factorInsights, dataHealth: dataHealth,
+  renderFreshness: renderFreshness, swipeMonth: swipeMonth, openQuickSheet: openQuickSheet,
+  openCalJumpSheet: openCalJumpSheet, runCorosSync: runCorosSync,
+  patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML
 };
 
 boot();

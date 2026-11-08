@@ -313,7 +313,8 @@ svg{display:block}
   .snav button:active{background:var(--fill)}
   .main-col{flex:1;margin-left:230px;min-width:0}
   .tabbar{display:none}
-  .content{padding-bottom:60px}
+  .content{max-width:1080px;padding-bottom:60px}
+  .navbar-in,.tabbar-in{max-width:1080px}
   .login-wrap{max-width:420px;margin:0 auto}
 }
 @media(max-width:899px){.sidebar{display:none}}
@@ -350,6 +351,97 @@ svg{display:block}
 .a-btn:active{opacity:.8}
 #btn-me.on{color:var(--blue);background:var(--blue-soft)}
 .snav .side-sep{height:1px;background:var(--sep);margin:10px 8px}
+
+/* ---------- 洞察 / 个人基线 / 环比 ---------- */
+.fresh-bar{background:var(--fill);color:var(--text-2);font-size:12px;line-height:1.5;padding:6px 16px;text-align:center}
+.insight{background:var(--card);border-radius:var(--r);padding:12px 14px;margin-top:12px;display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.insight:active{background:var(--card2)}
+.insight .ii{width:28px;height:28px;border-radius:8px;background:var(--blue-soft);color:var(--blue);display:grid;place-items:center;flex:none}
+.insight .it{flex:1;min-width:0;font-size:13.5px;line-height:1.55}
+.insight .is{font-size:11.5px;color:var(--text-3);margin-top:3px;line-height:1.5}
+.insight .go{color:var(--text-3);flex:none;display:grid;place-items:center}
+.health .hcell{cursor:pointer}
+.health .hcell:active{background:var(--fill)}
+.hdelta{font-size:10.5px;margin-top:2px;line-height:1.2;color:var(--text-3);white-space:nowrap}
+.hdelta.good{color:var(--green)}
+.hdelta.warn{color:var(--orange)}
+.sparkcard{background:var(--card);border-radius:var(--r);padding:12px 14px;margin-top:8px}
+.sparkcard .sh{display:flex;justify-content:space-between;font-size:12.5px;color:var(--text-2);margin-bottom:8px}
+.sparkline{display:block;width:100%;height:24px}
+.review{background:var(--card);border-radius:var(--r);margin:0 0 12px;overflow:hidden}
+.review summary{list-style:none;padding:12px 14px;font-size:14px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:space-between}
+.review summary::-webkit-details-marker{display:none}
+.review summary .rs{font-size:11.5px;color:var(--text-3);font-weight:400}
+.review-body{border-top:.5px solid var(--sep);padding:6px 14px 12px}
+.rv-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:12.5px}
+.rv-row .rk{flex:1;color:var(--text-2)}
+.rv-row .rv{font-weight:500}
+.rv-row .rp{color:var(--text-3);font-size:11.5px}
+.rv-row .rd{font-size:11px;min-width:48px;text-align:right}
+.rv-row .rd.up{color:var(--green)}
+.rv-row .rd.down{color:var(--orange)}
+.metric{grid-template-columns:repeat(3,1fr)}
+.metric .mcell.wide{grid-column:auto}
+.metric .mcell .v{font-size:21px}
+.mcell .cmp{font-size:10.5px;margin-top:3px;line-height:1.3;color:var(--text-3)}
+.mcell .cmp.up{color:var(--green)}
+.mcell .cmp.down{color:var(--orange)}
+.mcell .spark{margin-top:6px;height:20px}
+.mcell .spark svg{width:100%;height:20px}
+.chart-seg{margin-bottom:0}
+.chartwrap .hit{cursor:pointer}
+.chart-note{font-size:11px;color:var(--text-3);padding:2px 6px 0}
+
+/* ---------- 日历运动类型图标（居中） ---------- */
+.cal-cell{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.cal-cell .cnum{line-height:1}
+.cal-cell.hasact::before{content:none !important}
+.cal-cell.today::after{bottom:auto;top:3px}
+.act-badge{display:flex;align-items:center;justify-content:center;width:19px;height:19px;
+  border-radius:50%;background:var(--green);color:#fff;position:relative;margin-top:1px;flex:none}
+.act-badge svg{display:block;width:13px;height:13px}
+.act-badge .ic{stroke-width:2.3}
+.act-badge i{position:absolute;top:-5px;right:-7px;font-style:normal;font-size:9px;line-height:1;
+  background:var(--card);color:var(--green);border-radius:8px;padding:2px 3px;font-weight:500}
+.cal-cell.l2 .act-badge,.cal-cell.l3 .act-badge,.cal-cell.l4 .act-badge{background:#fff;color:var(--green)}
+.cal-cell.l2 .act-badge i,.cal-cell.l3 .act-badge i,.cal-cell.l4 .act-badge i{background:var(--orange);color:#1c1000}
+.cal-cell.nodata{opacity:.3}
+.legend .lg-act svg{display:block}
+
+/* ---------- 合并页分段与桌面双列 ---------- */
+.lib-nav{position:sticky;top:52px;z-index:15;background:var(--bg);padding:6px 0 4px;margin:0 0 12px;border-bottom:.5px solid var(--sep)}
+.lib-nav .seg{margin:0}
+.lib-cols{display:block}
+@media(min-width:900px){.lib-cols{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start}}
+#lib-books,#lib-plans,#lib-logs{scroll-margin-top:112px}
+
+/* ---------- 快速录入 ---------- */
+.quick-q{width:100%;border:0;background:var(--card2);color:var(--text);border-radius:10px;padding:11px 13px;outline:none;margin:2px 0 12px}
+.quick-hint{font-size:11.5px;color:var(--text-3);padding:0 4px 10px;line-height:1.5}
+
+/* ---------- 数据健康 ---------- */
+.data-health{padding:0}
+.dh-title{font-size:12px;color:var(--text-2);padding:12px 14px 4px}
+.dh-row{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:.5px solid var(--sep)}
+.dh-row:last-child{border-bottom:0}
+.dh-row .dk{flex:1;color:var(--text-2);font-size:13px}
+.dh-row .dv{font-size:13.5px;font-weight:500}
+.dh-bar{height:5px;border-radius:3px;background:var(--fill);overflow:hidden;margin:2px 14px 12px}
+.dh-bar i{display:block;height:100%;background:var(--blue)}
+
+/* ---------- 撤销 / 动画 / 可达性 ---------- */
+#toast .undo{color:var(--blue);font-size:13.5px;font-weight:500;margin-left:12px;padding:2px 4px}
+.pop .chk{animation:chkpop .32s cubic-bezier(.32,.72,0,1)}
+@keyframes chkpop{0%{transform:scale(.55)}60%{transform:scale(1.18)}100%{transform:scale(1)}}
+[data-act="corosSync"].busy{opacity:.55;pointer-events:none}
+[data-act="corosSync"].busy::after{content:"";display:inline-block;width:11px;height:11px;margin-left:6px;
+  border-radius:50%;border:2px solid var(--fill-3);border-top-color:var(--blue);
+  animation:sp .8s linear infinite;vertical-align:-1px}
+.iconbtn{width:40px;height:40px}
+.note .x{width:40px;height:40px}
+.cal-nav button{width:40px;height:40px}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.001ms !important;transition-duration:.001ms !important}}
 </style>
 </head>
 <body>
@@ -397,6 +489,9 @@ svg{display:block}
       <div class="navbar-in">
         <h1 id="nav-title">今日</h1>
         <div class="right">
+          <button class="iconbtn" id="btn-quick" data-act="quick" title="快速操作（⌘K / Ctrl+K）" aria-label="快速操作">
+            <svg width="18" height="18" viewBox="0 0 24 24" class="ic"><path d="M12 5.2v13.6M5.2 12h13.6"/></svg>
+          </button>
           <button class="iconbtn" id="btn-me" data-act="tab" data-id="me" title="我的">
             <svg width="17" height="17" viewBox="0 0 24 24" class="ic"><circle cx="12" cy="8" r="3.6"/><path d="M4.6 20.2c0-3.7 3.3-5.7 7.4-5.7s7.4 2 7.4 5.7"/></svg>
           </button>
@@ -408,6 +503,7 @@ svg{display:block}
     </header>
 
     <div class="offline-bar" id="offline-bar" hidden>离线模式 · 正在显示本机缓存数据，联网后自动同步</div>
+    <div class="fresh-bar" id="fresh-bar" hidden></div>
 
     <div class="content">
       <section id="view-today"></section>

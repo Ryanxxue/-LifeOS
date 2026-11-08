@@ -197,8 +197,10 @@ TEST = r'''
 
     /* --- 日历页运动记录 --- */
     goTab('calendar');
-    ok('日历：有运动的日期带绿点标记',
+    ok('日历：有运动的日期带运动类型图标（不再是绿点）',
        !!q1('#view-calendar .cal-cell.hasact') &&
+       !!q1('#view-calendar .cal-cell.hasact .act-badge svg') &&
+       !/绿点/.test(q1('#view-calendar').textContent) &&
        /本月运动 \d+ 次/.test(q1('#view-calendar').textContent));
     const actDay = dayAt(-1);
     const calCell = q1('#view-calendar [data-act="calday"][data-id="' + actDay + '"]');
@@ -493,6 +495,175 @@ TEST = r'''
     ok('COROS 运动重复写入只保留 1 行且值更新',
        acts.length === 1 && Number(acts[0].duration_sec) === 2700,
        'rows=' + acts.length + ' dur=' + (acts[0] && acts[0].duration_sec));
+
+    /* ==================== 本轮：运动类型图标 + P0/P1 优化 ==================== */
+    const cssText = document.querySelector('style').textContent;
+
+    /* --- 日历运动图标居中 --- */
+    goTab('calendar'); await tick();
+    const iconCell = q1('#view-calendar .cal-cell.hasact');
+    ok('运动图标：日历格子内显示对应类型图标且水平居中',
+       !!iconCell && !!iconCell.querySelector('.act-badge svg') &&
+       getComputedStyle(iconCell).justifyContent === 'center' &&
+       getComputedStyle(iconCell).alignItems === 'center',
+       iconCell ? iconCell.className : 'none');
+    ok('运动图标：类型映射覆盖骑行/游泳/力量/徒步',
+       window.LifeApp.sportKind({ name: 'Indoor Cycling' }) === 'bike' &&
+       window.LifeApp.sportKind({ name: 'Pool Swim' }) === 'swim' &&
+       window.LifeApp.sportKind({ name: 'Strength' }) === 'strength' &&
+       window.LifeApp.sportKind({ name: 'Hiking' }) === 'hike' &&
+       window.LifeApp.sportKind({ name: 'Indoor Run' }) === 'run');
+    const ac2 = q1('#view-calendar [data-act="calday"][data-id="' + dayAt(-1) + '"]');
+    if (ac2) ac2.click(); await tick();
+    ok('运动图标：明细行也用类型图标并带可读标签',
+       !!q1('#view-calendar .actrow .licon svg') &&
+       /室内跑步/.test(q1('#view-calendar .actrow .licon').getAttribute('aria-label')));
+    ok('日历：格子带 aria-label 与 tabindex',
+       !!q1('#view-calendar .cal-cell[aria-label][tabindex="0"]'));
+
+    /* --- P0-6 日历导航 --- */
+    ok('日历：有回到今天与年月跳转入口',
+       !!q1('#view-calendar [data-act="caltoday"]') && !!q1('#view-calendar [data-act="caljump"]'));
+    window.LifeApp.swipeMonth(-2); await tick();
+    q1('#view-calendar [data-act="caltoday"]').click(); await tick();
+    ok('日历：回今天恢复本月与选中日',
+       S.calMonth.getMonth() === new Date().getMonth() && S.selDay === dayAt(0));
+    q1('#view-calendar [data-act="caljump"]').click(); await tick();
+    ok('日历：年月跳转面板可选年月', !!q1('#cj-year') && !!q1('#cj-month'));
+    const lastY = new Date().getFullYear() - 1;
+    q1('#cj-year').value = String(lastY); q1('#cj-month').value = '1';
+    q1('#sheet [data-act="calgo"]').click(); await tick();
+    ok('日历：可跳转到指定年月', S.calMonth.getFullYear() === lastY && S.calMonth.getMonth() === 0);
+    const oldD = new Date(); oldD.setDate(oldD.getDate() - 410);
+    S.calMonth = new Date(oldD.getFullYear(), oldD.getMonth(), 1); window.LifeApp.render(); await tick();
+    ok('日历：超出 400 天数据范围的日期置灰并标注',
+       !!q1('#view-calendar .cal-cell.nodata') &&
+       /超出本地数据范围/.test(q1('#view-calendar .cal-cell.nodata').getAttribute('aria-label')));
+    S.calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    S.selDay = dayAt(0); window.LifeApp.render();
+
+    /* --- P0-1/2/3 今日页 --- */
+    goTab('today'); await tick();
+    const insightEl = q1('#view-today .insight');
+    ok('P0-1：今日页给出一句话洞察且可下钻',
+       !!insightEl && /近 7 天|近 7 日常态|还没有今天的身体数据/.test(insightEl.textContent) &&
+       !!insightEl.getAttribute('data-act'));
+    S.health[dayAt(0)] = { sleep_total: 7.2, hrv: 58, resting_hr: 54, training_load: 40 };
+    window.LifeApp.render(); await tick();
+    ok('P0-2：有今日身体数据时四格显示个人基线偏移',
+       document.querySelectorAll('#view-today .hdelta').length >= 1 &&
+       !!q1('#view-today [data-act="healthdetail"]') &&
+       /近 7 日|近 7 天|常态/.test(q1('#view-today .insight').textContent));
+    q1('#view-today [data-act="healthdetail"]').click(); await tick();
+    ok('P0-2：点按展开近 14 天 sparkline 与基线值',
+       !!q1('#health-spark svg.sparkline') && /个人基线/.test(q1('#health-spark').textContent));
+    ok('P1-8：今日页有本周回顾折叠卡且含四项对比',
+       !!q1('#view-today .review') && /上周/.test(q1('#view-today .review').textContent) &&
+       document.querySelectorAll('#view-today .review .rv-row').length === 4);
+    const beforeHero = q1('#today-hero .val b') ? q1('#today-hero .val b').textContent : '';
+    const habitRow = q1('#view-today .lrow[data-act="toggle"]');
+    if (habitRow) habitRow.click(); await tick();
+    ok('P0-3：打卡局部更新并带勾选动画',
+       !!q1('#view-today .lrow.pop') && !!q1('#today-hero .val b') &&
+       q1('#today-hero .val b').textContent !== beforeHero,
+       beforeHero + ' -> ' + (q1('#today-hero .val b') ? q1('#today-hero .val b').textContent : ''));
+
+    /* --- P0-3 撤销 --- */
+    goTab('library'); await tick();
+    q1('#view-library [data-act="openbook"]').click(); await tick();
+    const noteBefore2 = window.LifeApp.activeNotes().length;
+    q1('#sheet [data-act="delnote"]').click(); await tick();
+    ok('P0-3：删除划线免确认、改为撤销 toast',
+       !q1('#confirm-mask').classList.contains('on') &&
+       !!q1('#toast .undo[data-act="undo"]') &&
+       window.LifeApp.activeNotes().length === noteBefore2 - 1);
+    q1('#toast .undo').click(); await tick();
+    ok('P0-3：撤销可恢复划线', window.LifeApp.activeNotes().length === noteBefore2,
+       String(noteBefore2));
+    const delPlanBtn = q1('#view-library [data-act="delplan"]');
+    if (delPlanBtn) { delPlanBtn.click(); await tick(); }
+    ok('P0-3：删除计划同样免确认',
+       !q1('#confirm-mask').classList.contains('on') && !!q1('#toast .undo'));
+    if (q1('#toast .undo')) { q1('#toast .undo').click(); await tick(); }
+    ok('P0-3：撤销后学习计划恢复', window.LifeApp.activePlans().length >= 1);
+
+    /* --- P1-10 合并页分段 --- */
+    ok('P1-10：合并页有粘性分段导航与双列容器',
+       !!q1('#view-library .lib-nav') && !!q1('#view-library .lib-cols') &&
+       !!q1('#lib-books') && !!q1('#lib-plans') && !!q1('#lib-logs'));
+    q1('#view-library .lib-nav [data-id="lib-plans"]').click(); await tick();
+    ok('P1-10：分段点击后高亮对应段',
+       q1('#view-library .lib-nav [data-id="lib-plans"]').classList.contains('on'));
+
+    /* --- P0-4/5 趋势页 --- */
+    goTab('trend'); await tick();
+    const gridCols = q1('#view-trend .metric') ? getComputedStyle(q1('#view-trend .metric')).gridTemplateColumns : '';
+    ok('P0-4：指标卡统一三列并带环比与 sparkline',
+       document.querySelectorAll('#view-trend .mcell').length === 3 &&
+       gridCols.split(' ').length === 3 &&
+       !!q1('#view-trend .mcell .cmp') && !!q1('#view-trend .mcell .spark svg'), gridCols);
+    ok('P0-5：图表默认单指标且末端标注当前值',
+       !!q1('#view-trend .chartcard .chart-current') &&
+       q1('#view-trend .chart-seg [data-id="rate"]').classList.contains('on') &&
+       /打卡完成率/.test(q1('#view-trend .chartcard .t').textContent));
+    q1('#view-trend .chart-seg [data-id="sleep"]').click(); await tick();
+    ok('P0-5：可切换到睡眠单指标',
+       /睡眠时长/.test(q1('#view-trend .chartcard .t').textContent));
+    q1('#view-trend .chart-seg [data-id="both"]').click(); await tick();
+    ok('P0-5：可切换叠加视图',
+       /完成率与睡眠/.test(q1('#view-trend .chartcard .t').textContent));
+    const hitEl = q1('#view-trend .chartwrap rect.hit[data-act="chartday"]');
+    ok('P0-5：图表每个日期都有点击热区', !!hitEl && !!hitEl.getAttribute('data-id'));
+    if (hitEl) {
+      const targetDay = hitEl.getAttribute('data-id');
+      hitEl.dispatchEvent(new MouseEvent('click', { bubbles: true })); await tick();
+      ok('P0-5：点按图表跳到日历并选中该天',
+         S.view === 'calendar' && S.selDay === targetDay, targetDay);
+    }
+
+    /* --- P1-7 相关性洞察 --- */
+    goTab('trend'); await tick();
+    const days5 = [dayAt(-4), dayAt(-3), dayAt(-2), dayAt(-1), dayAt(0)];
+    const fList = window.LifeApp.factorInsights(days5);
+    ok('P1-7：多因子相关性返回 6 个因子且按 |r| 排序',
+       fList.length === 6 &&
+       fList.every((x, i, a) => i === 0 || Math.abs(a[i - 1].r || 0) >= Math.abs(x.r || 0)));
+    ok('P1-7：样本不足时给出积累进度而非强结论',
+       /再积累 \d+ 天配对数据/.test(q1('#view-trend').textContent) && /样本偏少/.test(q1('#view-trend').textContent));
+
+    /* --- P1-9 快速录入 --- */
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+    await tick();
+    ok('P1-9：Ctrl/⌘K 打开快速操作面板',
+       q1('#mask').classList.contains('on') && !!q1('#quick-q') &&
+       document.querySelectorAll('#quick-list .rowbtn').length >= 6);
+    const qi = q1('#quick-q');
+    if (qi) { qi.value = 'coros'; qi.dispatchEvent(new Event('input', { bubbles: true })); await tick(); }
+    ok('P1-9：面板输入可过滤动作',
+       Array.from(document.querySelectorAll('#quick-list .rowbtn')).filter(b => !b.hidden).length === 1);
+    window.LifeApp.closeSheet();
+    ok('P1-9：右上角有常驻快速入口', !!q1('#btn-quick[data-act="quick"]'));
+
+    /* --- P1-11/12 可达性、状态透明 --- */
+    ok('P1-11：焦点态 / 减少动画 / 40px 触控目标样式存在',
+       /:focus-visible/.test(cssText) && /prefers-reduced-motion/.test(cssText) &&
+       /\.iconbtn\{width:40px/.test(cssText));
+    ok('P1-11：运动绿、进度蓝的颜色语义固定',
+       /\.act-badge\{[^}]*var\(--green\)/.test(cssText) && /--heat-3/.test(cssText));
+    ok('P1-12：同步 busy 样式与逻辑已抽取',
+       /\[data-act="corosSync"\]\.busy/.test(cssText) &&
+       typeof window.LifeApp.runCorosSync === 'function');
+    goMe(); await tick();
+    ok('P1-12：我的页有数据健康卡',
+       !!q1('#data-health') && /近 7 天身体数据/.test(q1('#data-health').textContent) &&
+       /COROS 连接/.test(q1('#data-health').textContent));
+    const oldSnap = S.snapshotAt;
+    S.snapshotAt = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    window.LifeApp.render(); await tick();
+    ok('P1-12：数据陈旧时显示更新时间',
+       !q1('#fresh-bar').hidden && /数据更新于 3 小时前/.test(q1('#fresh-bar').textContent));
+    S.snapshotAt = oldSnap; window.LifeApp.render();
+    goTab('today'); await tick();
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
   }
@@ -505,9 +676,10 @@ TEST = r'''
   if (location.hash.indexOf('trend') >= 0) goTab('trend');
   if (location.hash.indexOf('library') >= 0) goTab('library');
   if (location.hash.indexOf('calendar') >= 0) {
-    goTab('calendar');
-    const c = q1('#view-calendar [data-act="calday"][data-id="' + dayAt(-1) + '"]');
-    if (c) c.click();
+    S.calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    S.selDay = dayAt(-1);
+    S.view = 'calendar';
+    window.LifeApp.render();
   }
   if (location.hash.indexOf('confirm') >= 0) {
     window.LifeApp.askConfirm({ title: '删除这本书',
