@@ -68,6 +68,9 @@ MOCK = r'''
   const clone = o => JSON.parse(JSON.stringify(o));
   function run(query) {
     const t = query.t;
+    if (window.__MOCK__ && window.__MOCK__.failTable === t && query.op === 'select') {
+      throw new Error('injected select failure: ' + t);
+    }
     const list = store[t] || (store[t] = []);
     const match = row => query.filters.every(f => {
       const rv = row[f[0]];
@@ -80,6 +83,8 @@ MOCK = r'''
     });
     if (query.op === 'select') {
       let rows = list.filter(match).map(clone);
+      if (window.__MOCK__ && window.__MOCK__.hideLastInserted && query.t === 'habits' &&
+          query.filters.some(f => f[0] === 'id' && String(f[2]) === String(window.__MOCK__.lastInsertId))) rows = [];
       if (query.lim) rows = rows.slice(0, query.lim);
       return rows;
     }
@@ -88,7 +93,8 @@ MOCK = r'''
       for (const p of query.payload) {
         const r = Object.assign({}, p);
         r.id = ++seq;
-        r.owner_id = 'u1';
+        if (window.__MOCK__ && window.__MOCK__.hideLastInserted) window.__MOCK__.lastInsertId = r.id;
+        r.owner_id = (window.__MOCK__ && window.__MOCK__.forceOwner) || 'u1';
         r.created_at = r.created_at || new Date().toISOString();
         if (t === 'study_logs' && store[t].some(x => String(x.plan_id) === String(r.plan_id) && x.day === r.day)) {
           throw new Error('duplicate key value violates unique constraint 23505 study_logs_dedupe_idx');
@@ -150,6 +156,8 @@ MOCK = r'''
   };
   window.__STORE__ = store;
   window.__dayAt__ = dayAt;
+  /* 故障注入：模拟「云端把写入落到匿名身份」与「单张表查询失败」 */
+  window.__MOCK__ = { forceOwner: null, failTable: null, hideLastInserted: false, lastInsertId: null };
 })();
 '''
 
@@ -416,9 +424,85 @@ TEST = r'''
     ok('P2-2 离线条显示', !q1('#offline-bar').hidden);
     const habitsBeforeOffline = S.habits.length;
     q1('#view-me [data-act="delhabit"]').click(); await tick();
-    ok('P2-2 离线时写操作被拦截', /离线中/.test(q1('#toast').textContent) &&
-       S.habits.length === habitsBeforeOffline);
+    ok('P2-2 离线时写操作被拦截', /离线只读/.test(q1('#toast').textContent) &&
+       S.habits.length === habitsBeforeOffline && !!S.lastWriteError);
     S.offline = false; window.LifeApp.render();
+
+    /* --- 写入可靠性：新建打卡项落库 / 匿名身份隔离 / 单表容错 / 诊断可见 --- */
+    window.__MOCK__.forceOwner = null; window.__MOCK__.failTable = null;
+    const hCount0 = store.habits.length;
+    goTab('today'); await tick();
+    const newHabitBtn = q1('[data-act="newhabit"]');
+    if (newHabitBtn) newHabitBtn.click();
+    await tick();
+    const nameInput = q1('#ah-name');
+    if (nameInput) { nameInput.value = '回归测试待办'; nameInput.dispatchEvent(new Event('input', { bubbles: true })); }
+    const saveHabitBtn = q1('[data-act="savehabit"]');
+    if (saveHabitBtn) saveHabitBtn.click();
+    await tick(); await tick();
+    ok('写入：新建打卡项真实写入云端并留在内存',
+       store.habits.length === hCount0 + 1 &&
+       store.habits.some(h => h.name === '回归测试待办') &&
+       S.habits.some(h => h.name === '回归测试待办'),
+       'store=' + store.habits.length + ' S=' + S.habits.length);
+    await window.LifeApp.loadAll();
+    ok('写入：重新拉取云端数据后新项仍然存在',
+       S.habits.some(h => h.name === '回归测试待办') && !S.offline);
+
+    /* 云端把 INSERT 落到 owner_id='anon' 时必须报错，不能显示「已添加」 */
+    window.__MOCK__.forceOwner = 'anon';
+    const hCount1 = S.habits.length;
+    const newHabitBtn2 = q1('[data-act="newhabit"]');
+    if (newHabitBtn2) newHabitBtn2.click();
+    await tick();
+    const nameInput2 = q1('#ah-name');
+    if (nameInput2) { nameInput2.value = '不该成功的待办'; nameInput2.dispatchEvent(new Event('input', { bubbles: true })); }
+    const saveHabitBtn2 = q1('[data-act="savehabit"]');
+    if (saveHabitBtn2) saveHabitBtn2.click();
+    await tick(); await tick();
+    ok('写入：匿名身份写入被拒绝并留下可诊断错误',
+       /写入被云端隔离|重新登录/.test(q1('#toast').textContent) &&
+       S.habits.length === hCount1 && !!S.lastWriteError,
+       'toast=' + q1('#toast').textContent);
+    const closeBtn = q1('[data-act="closesheet"]');
+    if (closeBtn) closeBtn.click();
+    window.__MOCK__.forceOwner = null;
+    for (let i = store.habits.length - 1; i >= 0; i--) {
+      if (store.habits[i].owner_id === 'anon') store.habits.splice(i, 1);
+    }
+
+    /* 插入成功、但按 id 回读不到时，也不能乐观地显示「已添加」 */
+    const storeLen2 = store.habits.length, hCount2 = S.habits.length;
+    window.__MOCK__.hideLastInserted = true;
+    const newHabitBtn3 = q1('[data-act="newhabit"]');
+    if (newHabitBtn3) newHabitBtn3.click();
+    await tick();
+    const nameInput3 = q1('#ah-name');
+    if (nameInput3) { nameInput3.value = '读不回的待办'; nameInput3.dispatchEvent(new Event('input', { bubbles: true })); }
+    const saveHabitBtn3 = q1('[data-act="savehabit"]');
+    if (saveHabitBtn3) saveHabitBtn3.click();
+    await tick(); await tick();
+    ok('写入：写后回读失败时拒绝乐观更新',
+       /无法读回/.test(q1('#toast').textContent) && S.habits.length === hCount2,
+       'toast=' + q1('#toast').textContent);
+    const closeBtn2 = q1('[data-act="closesheet"]');
+    if (closeBtn2) closeBtn2.click();
+    window.__MOCK__.hideLastInserted = false;
+    store.habits.length = storeLen2;
+
+    /* 单张表读取失败不应把整页打成离线只读 */
+    window.__MOCK__.failTable = 'books';
+    const booksBefore = S.books.length;
+    let loadThrew = false;
+    try { await window.LifeApp.loadAll(); } catch (e) { loadThrew = true; }
+    ok('加载：单表失败不进入离线只读且保留缓存数据',
+       !loadThrew && !S.offline && S.loadWarnings === 1 && S.books.length === booksBefore,
+       'warnings=' + S.loadWarnings + ' books=' + S.books.length);
+    window.__MOCK__.failTable = null;
+
+    goMe(); await tick();
+    ok('诊断：我的页显示云端写入状态与数据账号',
+       /云端写入/.test(q1('#view-me').textContent) && /数据账号/.test(q1('#view-me').textContent));
 
     /* --- P2-3 最近删除与恢复 --- */
     const trash = window.LifeApp.recentDeleted();

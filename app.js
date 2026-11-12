@@ -23,13 +23,14 @@ const dbId = v => { const n = Number(v); return isFinite(n) ? n : v; };
 
 let toastTimer = null, pendingUndo = null;
 /* 高频删除走「撤销」而不是二次确认：toast 里带一个 6 秒内可点的撤销按钮 */
-function toast(msg, undoFn) {
+function toast(msg, undoFn, ms) {
   const t = $('#toast'); if (!t) return;
   pendingUndo = (typeof undoFn === 'function') ? undoFn : null;
   t.innerHTML = esc(msg) + (pendingUndo ? '<button class="undo" data-act="undo">撤销</button>' : '');
   t.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(function () { t.classList.remove('on'); pendingUndo = null; }, pendingUndo ? 6000 : 2200);
+  toastTimer = setTimeout(function () { t.classList.remove('on'); pendingUndo = null; },
+    pendingUndo ? 6000 : (ms || 2200));
 }
 
 /* ==================== 站点访问码 ==================== */
@@ -101,6 +102,61 @@ const q = async (p) => {
   return data;
 };
 
+/* ---- 写入可靠性 ----------------------------------------------------------
+   云端在请求没带用户 JWT 时会以 owner_id='anon' 把 INSERT「成功」写进去，
+   前端拿到 data 就以为保存成功；但随后的 SELECT 被 RLS 过滤，用户看到的是
+   「已添加，刷新就没了」。所以每一条 insert 都要校验返回行的 owner。 */
+function noteWriteError(act, e) {
+  const rec = { at: new Date().toISOString(), act: act || '',
+    message: String((e && e.message) || e || ''), owner: S.ownerId || '' };
+  S.lastWriteError = rec;
+  try { localStorage.setItem('lb.lastWriteError', JSON.stringify(rec)); } catch (x) {}
+  return rec;
+}
+function assertOwner(row) {
+  const o = row && row.owner_id;
+  if (o === null || o === undefined) return;      // 该表/SDK 不回传 owner 时交给会话守卫
+  const v = String(o);
+  if (v === 'anon' || (S.ownerId && v !== S.ownerId)) {
+    const e = new Error('写入被云端隔离：本次请求的账号与现有数据不一致，请重新登录后再试');
+    e.needRelogin = true;
+    throw e;
+  }
+}
+async function insertRows(table, payload) {
+  const rows = normRows(await q(DB.from(table).insert(payload).select()));
+  if (!rows.length) throw new Error('云端未返回写入结果（可能被权限过滤）');
+  rows.forEach(assertOwner);
+  if (S.lastWriteError) {
+    S.lastWriteError = null;
+    try { localStorage.removeItem('lb.lastWriteError'); } catch (x) {}
+  }
+  return rows;
+}
+/* 写操作前的守卫：离线只读、会话失效都必须在写入之前明确告知，而不是静默拦掉 */
+let sessionCheckedAt = 0;
+async function writeGuard(act) {
+  if (S.offline) {
+    noteWriteError(act, new Error('离线只读模式，写入未发送到云端'));
+    toast('当前是离线只读模式，这次操作没有写入云端。联网后刷新页面再试', null, 6000);
+    return false;
+  }
+  if (!cloud || !cloud.auth) return true;
+  if (Date.now() - sessionCheckedAt > 300000) {
+    try {
+      const r = await cloud.auth.getSession();
+      const s = r && r.data;
+      if (!s || (!s.access_token && !s.user)) {
+        noteWriteError(act, new Error('登录状态已失效（未取得会话）'));
+        showLogin('登录状态已失效，请重新登录后再写入');
+        return false;
+      }
+      sessionCheckedAt = Date.now();
+    } catch (e) { /* 探测失败不阻断写入，由 owner 校验兜底 */ }
+  }
+  return true;
+}
+
 /* ==================== 状态 ==================== */
 const S = {
   user: null,
@@ -123,7 +179,10 @@ const S = {
   libSec: 'lib-books',
   loading: false,
   offline: false,
-  snapshotAt: null
+  snapshotAt: null,
+  ownerId: null,          // 从云端读回的真实 owner，用于校验写入身份
+  loadWarnings: 0,        // 本次加载失败的表数量
+  lastWriteError: null    // 最近一次写入失败，「我的 → 数据健康」可见
 };
 
 /* ==================== 图标 ==================== */
@@ -225,7 +284,9 @@ const normRows = rows => (rows || []).map(normRow);
 async function loadAll() {
   if (!DB) throw new Error('云服务未就绪');
   const since = dayKey(addDays(new Date(), -400));
-  const [habits, checkins, health, acts, books, notes, plans, logs] = await Promise.all([
+  /* 逐表容错：任何一张表查询失败都不该把整个页面打成「离线只读」，
+     否则用户看到缓存数据却写不进去，且没有任何明确原因。 */
+  const rs = await Promise.allSettled([
     q(DB.from('habits').select('*').order('sort_order').order('id')),
     q(DB.from('checkins').select('habit_id,day').gte('day', since)),
     q(DB.from('health_daily').select('*').gte('day', since).order('day')),
@@ -235,20 +296,32 @@ async function loadAll() {
     q(DB.from('study_plans').select('*').order('sort_order').order('id')),
     q(DB.from('study_logs').select('*').gte('day', since).order('day', { ascending: false }))
   ]);
+  if (rs.every(r => r.status === 'rejected')) throw (rs[0].reason || new Error('数据加载失败'));
+  S.loadWarnings = rs.filter(r => r.status === 'rejected').length;
+  const at = i => rs[i].status === 'fulfilled' ? (rs[i].value || []) : null;
+  const habits = at(0), checkins = at(1), health = at(2), acts = at(3),
+        books = at(4), notes = at(5), plans = at(6), logs = at(7);
   // habits / plans 保留 archived 记录：计算历史分母需要它们，UI 再用 activeXxx() 过滤
-  S.habits = normRows(habits);
-  S.checkins = {};
-  (checkins || []).forEach(r => {
-    const d = String(r.day).slice(0, 10);
-    (S.checkins[d] = S.checkins[d] || {})[String(r.habit_id)] = true;
-  });
-  S.health = {};
-  (health || []).forEach(r => { S.health[String(r.day).slice(0, 10)] = r; });
-  S.activities = normRows(acts);
-  S.books = normRows(books);
-  S.notes = normRows(notes);
-  S.plans = normRows(plans);
-  S.logs = normRows(logs);
+  if (habits) S.habits = normRows(habits);
+  if (checkins) {
+    S.checkins = {};
+    checkins.forEach(r => {
+      const d = String(r.day).slice(0, 10);
+      (S.checkins[d] = S.checkins[d] || {})[String(r.habit_id)] = true;
+    });
+  }
+  if (health) {
+    S.health = {};
+    health.forEach(r => { S.health[String(r.day).slice(0, 10)] = r; });
+  }
+  if (acts) S.activities = normRows(acts);
+  if (books) S.books = normRows(books);
+  if (notes) S.notes = normRows(notes);
+  if (plans) S.plans = normRows(plans);
+  if (logs) S.logs = normRows(logs);
+  const probe = [].concat(habits || [], health || [], acts || [], books || [],
+    notes || [], plans || [], logs || []).find(r => r && r.owner_id);
+  if (probe) S.ownerId = String(probe.owner_id);
   bump();
 }
 
@@ -297,13 +370,14 @@ async function toggleCheckin(habitId, day, skipRender) {
     if (on) {
       await q(DB.from('checkins').delete().eq('habit_id', dbId(habitId)).eq('day', day).select());
     } else {
-      await q(DB.from('checkins').insert({ habit_id: dbId(habitId), day: day }).select());
+      await insertRows('checkins', { habit_id: dbId(habitId), day: day });
     }
   } catch (e) {
     // 回滚
     if (on) m[String(habitId)] = true; else delete m[String(habitId)];
     render();
-    toast('保存失败：' + (e.message || '网络异常'));
+    noteWriteError('toggle', e);
+    toast('保存失败：' + (e.message || '网络异常'), null, 6000);
   }
 }
 
@@ -314,8 +388,15 @@ async function saveHabit(payload, id) {
     const i = S.habits.findIndex(h => eqId(h.id, id));
     if (i >= 0) S.habits[i] = Object.assign(S.habits[i], rows[0]);
   } else {
-    const rows = normRows(await q(DB.from('habits').insert(payload).select()));
-    if (!rows.length) throw new Error('未能创建打卡项');
+    const rows = await insertRows('habits', payload);
+    /* 写后回读：确认这行对当前账号可见，杜绝「提示已添加、刷新就没了」 */
+    const back = await q(DB.from('habits').select('id').eq('id', dbId(rows[0].id)).limit(1));
+    if (!back || !back.length) {
+      const e = new Error('写入后无法读回该打卡项（可能被账号权限隔离），请重新登录后再试');
+      e.needRelogin = true;
+      throw e;
+    }
+    if (!S.ownerId && rows[0].owner_id) S.ownerId = String(rows[0].owner_id);
     S.habits.push(rows[0]);
   }
   render();
@@ -332,7 +413,7 @@ async function removeHabit(id) {
 }
 
 async function saveBook(payload) {
-  const rows = normRows(await q(DB.from('books').insert(payload).select()));
+  const rows = await insertRows('books', payload);
   if (!rows.length) throw new Error('未能添加书籍');
   S.books.unshift(rows[0]);
   render();
@@ -365,7 +446,7 @@ async function addNotes(list) {
   for (const row of list) {
     if (S.notes.some(n => !n.deleted_at && eqId(n.book_id, row.book_id) && n.content === row.content)) { skipped++; continue; }
     try {
-      const rows = normRows(await q(DB.from('notes').insert(row).select()));
+      const rows = await insertRows('notes', row);
       if (rows[0]) { S.notes.push(rows[0]); added++; } else skipped++;
     } catch (e) {
       if (/duplicate|unique|23505|conflict/i.test(e.message || '')) skipped++;
@@ -384,7 +465,7 @@ async function removeNote(id) {
 }
 
 async function savePlan(payload) {
-  const rows = normRows(await q(DB.from('study_plans').insert(payload).select()));
+  const rows = await insertRows('study_plans', payload);
   if (!rows.length) throw new Error('未能创建计划');
   S.plans.push(rows[0]); render();
 }
@@ -405,7 +486,7 @@ async function logStudy(planId) {
   if (loggedToday(planId, today)) { toast('今天已经记过一次了'); return false; }
   let rows;
   try {
-    rows = normRows(await q(DB.from('study_logs').insert({ plan_id: dbId(planId), day: today }).select()));
+    rows = await insertRows('study_logs', { plan_id: dbId(planId), day: today });
   } catch (e) {
     if (/duplicate|unique|23505|conflict/i.test(e.message || '')) { toast('今天已经记过一次了'); return false; }
     throw e;
@@ -446,7 +527,7 @@ async function upsertHealth(day, patch) {
     await patchById('health_daily', id, payload);
   } else {
     try {
-      const rows = await q(DB.from('health_daily').insert(Object.assign({ day: day }, clean)).select());
+      const rows = await insertRows('health_daily', Object.assign({ day: day }, clean));
       if (rows && rows[0]) id = dbId(rows[0].id);
     } catch (e) {
       if (!isDupError(e)) throw e;
@@ -474,8 +555,8 @@ async function upsertActivity(row) {
     return;
   }
   try {
-    const rows = await q(DB.from('activities').insert(row).select());
-    const saved = rows && rows[0] ? normRow(rows[0]) : null;
+    const rows = await insertRows('activities', row);
+    const saved = rows && rows[0] ? rows[0] : null;
     if (saved) S.activities.push(saved);
   } catch (e) {
     if (!isDupError(e)) throw e;
@@ -495,7 +576,7 @@ async function kvSet(k, v) {
   if (rows && rows[0]) {
     await q(DB.from('app_kv').update({ v: v, updated_at: new Date().toISOString() }).eq('id', rows[0].id).select());
   } else {
-    await q(DB.from('app_kv').insert({ k: k, v: v }).select());
+    await insertRows('app_kv', { k: k, v: v });
   }
 }
 async function kvDel(k) {
@@ -635,10 +716,10 @@ async function restoreBackup(payload) {
       if (t === 'app_kv' &&
           (/^coros/i.test(String(row.k)) || cur.some(r => String(r.k) === String(row.k)))) { skipped++; continue; }
       try {
-        const ins = normRows(await q(DB.from(t).insert(row).select()));
+        const ins = await insertRows(t, row);
         if (ins[0]) { idMap[t][oldId] = dbId(ins[0].id); cur.push(ins[0]); added++; }
         else skipped++;
-      } catch (e) { skipped++; }
+      } catch (e) { noteWriteError('importbackup', e); skipped++; }
     }
   }
   await loadAll(); saveSnapshot(); render();
@@ -1645,6 +1726,15 @@ function renderMe() {
     '<div class="dh-row"><span class="dk">近 7 天运动</span><span class="dv">' + dh.acts + ' 次</span></div>' +
     '<div class="dh-row"><span class="dk">缺失身体数据</span><span class="dv">' + (7 - dh.have) + ' 天</span></div>' +
     '<div class="dh-row"><span class="dk">最近删除可恢复</span><span class="dv">' + dh.deleted + ' 项</span></div>' +
+    '<div class="dh-row"><span class="dk">云端写入</span><span class="dv">' +
+      (S.offline ? '离线只读' : (S.lastWriteError ? '最近一次失败' : '正常')) + '</span></div>' +
+    (S.ownerId ? '<div class="dh-row"><span class="dk">数据账号</span><span class="dv">' +
+      esc(S.ownerId.length > 16 ? S.ownerId.slice(0, 8) + '…' + S.ownerId.slice(-4) : S.ownerId) + '</span></div>' : '') +
+    (S.loadWarnings ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">本次有 ' +
+      S.loadWarnings + ' 张表读取失败，显示的是上一次缓存</div>' : '') +
+    (S.lastWriteError ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">' +
+      esc(S.lastWriteError.at.slice(5, 16).replace('T', ' ')) + ' · ' + esc(S.lastWriteError.act) +
+      ' · ' + esc(S.lastWriteError.message) + '</div>' : '') +
     '</div>';
 
   html += '<div class="gtitle">数据连接</div><div class="card">' +
@@ -1815,7 +1905,10 @@ async function submitHabit(editId) {
     await saveHabit(payload, editId || null);
     closeSheet();
     toast(editId ? '已保存' : '已添加');
-  } catch (e) { toast('保存失败：' + (e.message || '网络异常')); }
+  } catch (e) {
+    noteWriteError('savehabit', e);
+    toast('保存失败：' + (e.message || '网络异常') + (e.needRelogin ? '。请重新登录' : ''), null, 6000);
+  }
 }
 
 /* ==================== 添加书籍 ==================== */
@@ -1932,7 +2025,7 @@ document.addEventListener('click', async function (ev) {
   const eid = sid(id);          // 实体主键一律按字符串匹配
   const day = el.getAttribute('data-day');
 
-  if (S.offline && WRITE_ACTS.has(act)) { toast('离线中，请联网后再操作'); return; }
+  if (WRITE_ACTS.has(act) && !(await writeGuard(act))) return;
 
   // 选择器类
   if (el.hasAttribute('data-pick')) {
@@ -1963,7 +2056,8 @@ document.addEventListener('click', async function (ev) {
     case 'quickgo': {
       const doIt = el.getAttribute('data-do');
       if (S.offline && ['newhabit', 'addbook', 'newplan', 'logfirst', 'corosSync'].indexOf(doIt) >= 0) {
-        toast('离线中，请联网后再操作'); break;
+        noteWriteError('quickgo:' + doIt, new Error('离线只读模式，操作未执行'));
+        toast('当前是离线只读模式，联网后刷新页面再试', null, 6000); break;
       }
       closeSheet();
       if (doIt === 'newhabit') openHabitSheet(null);
@@ -2219,6 +2313,7 @@ async function enterApp(session) {
 }
 
 async function boot() {
+  try { S.lastWriteError = JSON.parse(localStorage.getItem('lb.lastWriteError') || 'null'); } catch (e) {}
   applyGlass(glassOn(), true);
   initGlassLight();
   installManifest();
