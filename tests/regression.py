@@ -675,6 +675,8 @@ TEST = r'''
     ok('P1-10：合并页有粘性分段导航与双列容器',
        !!q1('#view-library .lib-nav') && !!q1('#view-library .lib-cols') &&
        !!q1('#lib-books') && !!q1('#lib-plans') && !!q1('#lib-logs'));
+    ok('iOS 组件：分段控件初始就有选中滑块',
+       q1('#view-library .lib-nav [data-id="lib-books"]').classList.contains('on'));
     q1('#view-library .lib-nav [data-id="lib-plans"]').click(); await tick();
     ok('P1-10：分段点击后高亮对应段',
        q1('#view-library .lib-nav [data-id="lib-plans"]').classList.contains('on'));
@@ -751,9 +753,37 @@ TEST = r'''
     /* ==================== iOS 液态玻璃 ==================== */
     ok('液态玻璃：默认开启且材质 token 已注入',
        document.documentElement.getAttribute('data-glass') === 'on' &&
-       /--glass-fill/.test(cssText) && /backdrop-filter:blur\(var\(--glass-blur\)\)/.test(cssText));
+       /--glass-fill/.test(cssText) && /--glass-content/.test(cssText) &&
+       /backdrop-filter:blur\(var\(--glass-blur-strong\)\)/.test(cssText));
+
+    const navEl = q1('.navbar');
+    const contentEl = q1('#view-' + S.view + ' .card') || q1('.card');
+    const navBf = navEl ? getComputedStyle(navEl).backdropFilter : '';
+    const contentBf = contentEl ? getComputedStyle(contentEl).backdropFilter : '';
+    ok('iOS 26：玻璃只在导航层，内容卡片改用系统材料不模糊',
+       /blur/.test(navBf) && /^(none|)$/.test(contentBf),
+       'nav=' + navBf + ' card=' + contentBf);
+    const tabEl = q1('.tabbar');
+    const tbRadius = tabEl ? parseFloat(getComputedStyle(tabEl).borderTopLeftRadius) : 0;
+    const tbLeft = tabEl ? tabEl.getBoundingClientRect().left : 0;
+    const tabBg = tabEl ? getComputedStyle(tabEl).backgroundColor : '';
+    const navBg = navEl ? getComputedStyle(navEl).backgroundColor : '';
+    ok('iOS 26：标签栏是浮动玻璃胶囊',
+       tbRadius >= 20 && tbLeft >= 8 && /border-radius:26px/.test(cssText),
+       'r=' + tbRadius + ' left=' + tbLeft);
+    ok('iOS 26：组件覆盖未被 :is() 里的 ID 特异性压掉',
+       /30, 30, 36/.test(tabBg) && /rgba\(0, 0, 0, 0\)|transparent/.test(navBg),
+       'tab=' + tabBg + ' nav=' + navBg);
+    ok('iOS 组件：34px 粗体大标题与滚动收起',
+       /\.head h2\{font-size:34px;font-weight:700/.test(cssText) &&
+       /\.navbar\.scrolled h1\{opacity:1\}/.test(cssText) &&
+       typeof window.LifeApp.initNavScroll === 'function');
+    ok('iOS 组件：胶囊分段与 inset grouped 缩进分隔线',
+       /html\[data-glass="on"\] \.seg\{border-radius:999px/.test(cssText) &&
+       /\.card \.lrow:not\(:last-child\)/.test(cssText));
+
     ok('液态玻璃：环境光、镜面高光、光源跟随与减弱透明度降级齐全',
-       /radial-gradient\(58% 46%/.test(cssText) && /--glass-hi/.test(cssText) &&
+       /radial-gradient\(70% 52%/.test(cssText) && /--glass-hi/.test(cssText) &&
        /@property --gx/.test(cssText) && /prefers-reduced-transparency/.test(cssText) &&
        /@supports not/.test(cssText) && typeof window.LifeApp.initGlassLight === 'function');
     ok('液态玻璃：浅色主题有独立的玻璃材质参数',

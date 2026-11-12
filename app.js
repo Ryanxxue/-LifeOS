@@ -1361,7 +1361,8 @@ function renderLibrary() {
 
   html += '<div class="lib-nav"><div class="seg">' +
     [['lib-books', '书架'], ['lib-plans', '计划'], ['lib-logs', '记录']].map(x =>
-      '<button data-act="libsec" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div></div>';
+      '<button class="' + (S.libSec === x[0] ? 'on' : '') + '" data-act="libsec" data-id="' +
+      x[0] + '">' + x[1] + '</button>').join('') + '</div></div>';
 
   /* ---- 左列：书架 ---- */
   let left = '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
@@ -2312,9 +2313,26 @@ async function enterApp(session) {
   }
 }
 
+/* iOS 大标题：滚动后收起为内联标题，导航栏才出现材质与滚动边缘分隔 */
+function initNavScroll() {
+  const nav = $('.navbar');
+  if (!nav) return;
+  let queued = false;
+  const update = () => {
+    const y = window.scrollY || document.documentElement.scrollTop || 0;
+    nav.classList.toggle('scrolled', y > 24);
+    queued = false;
+  };
+  window.addEventListener('scroll', function () {
+    if (!queued) { queued = true; requestAnimationFrame(update); }
+  }, { passive: true });
+  update();
+}
+
 async function boot() {
   try { S.lastWriteError = JSON.parse(localStorage.getItem('lb.lastWriteError') || 'null'); } catch (e) {}
   applyGlass(glassOn(), true);
+  initNavScroll();
   initGlassLight();
   installManifest();
   installSW();
@@ -2504,7 +2522,8 @@ window.LifeApp = {
   renderFreshness: renderFreshness, swipeMonth: swipeMonth, openQuickSheet: openQuickSheet,
   openCalJumpSheet: openCalJumpSheet, runCorosSync: runCorosSync,
   patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML,
-  applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight
+  applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight,
+  initNavScroll: initNavScroll
 };
 
 boot();

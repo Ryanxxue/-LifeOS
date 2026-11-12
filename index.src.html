@@ -83,7 +83,7 @@ svg{display:block}
   border-bottom:.5px solid transparent;transition:border-color .2s}
 .navbar.scrolled{border-bottom-color:var(--sep)}
 .navbar-in{max-width:760px;margin:0 auto;padding:10px 16px 8px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.navbar h1{font-size:19px;font-weight:500;letter-spacing:-.01em;margin:0;opacity:0;transition:opacity .2s}
+.navbar h1{font-size:17px;font-weight:600;letter-spacing:-.02em;margin:0;opacity:0;transition:opacity .2s}
 .navbar.scrolled h1{opacity:1}
 .navbar .right{display:flex;gap:6px;align-items:center;margin-left:auto}
 .iconbtn{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:var(--text);background:var(--fill)}
@@ -91,11 +91,11 @@ svg{display:block}
 
 .content{max-width:760px;margin:0 auto;padding:0 16px calc(96px + var(--safe-b))}
 .head{padding:6px 0 14px}
-.head .date{color:var(--text-2);font-size:13px;margin-bottom:2px}
-.head h2{font-size:32px;font-weight:500;letter-spacing:-.025em;margin:0;line-height:1.15}
+.head .date{color:var(--text-3);font-size:12px;letter-spacing:.03em;margin-bottom:3px}
+.head h2{font-size:34px;font-weight:700;letter-spacing:-.035em;margin:0;line-height:1.12}
 
 .card{background:var(--card);border-radius:var(--r);overflow:hidden}
-.gtitle{font-size:13px;color:var(--text-2);margin:22px 4px 8px;font-weight:400}
+.gtitle{font-size:12.5px;color:var(--text-3);margin:26px 4px 8px;font-weight:500;letter-spacing:.02em}
 .gfoot{font-size:12px;color:var(--text-3);margin:8px 4px 0;line-height:1.5}
 
 /* ---------- 今日 ---------- */
@@ -240,6 +240,7 @@ svg{display:block}
 .tabbar-in{max-width:760px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr)}
 .tab{display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 0 5px;color:var(--text-3)}
 .tab.on{color:var(--blue)}
+.tab.on span{font-weight:600}
 .tab span{font-size:10.5px;letter-spacing:0}
 
 /* 弹层 */
@@ -448,43 +449,48 @@ svg{display:block}
 @property --gx{syntax:'<percentage>';inherits:true;initial-value:18%}
 @property --gy{syntax:'<percentage>';inherits:true;initial-value:0%}
 :root{
-  --glass-fill:rgba(38,38,44,.58); --glass-fill-2:rgba(52,52,60,.64);
-  --glass-edge:rgba(255,255,255,.16); --glass-hi:rgba(255,255,255,.30);
+  /* 导航/控制层 = Liquid Glass；内容层 = 系统材料（半透明实色、不模糊），遵循 HIG 的层级划分 */
+  --glass-fill:rgba(44,44,52,.56); --glass-fill-2:rgba(58,58,68,.62);
+  --glass-content:rgba(30,30,34,.86); --glass-content-2:rgba(40,40,46,.90);
+  --glass-content-edge:rgba(255,255,255,.10); --glass-bar-fill:rgba(30,30,36,.92);
+  --glass-edge:rgba(255,255,255,.20); --glass-hi:rgba(255,255,255,.34);
   --glass-spec:rgba(255,255,255,.10);
-  --glass-blur:16px; --glass-blur-strong:26px;
-  --glass-shadow:0 12px 32px rgba(0,0,0,.34);
+  --glass-blur:16px; --glass-blur-strong:24px;
+  --glass-shadow:0 12px 32px rgba(0,0,0,.30);
   --gx:18%; --gy:0%;
 }
 :root[data-theme="light"]{
-  --glass-fill:rgba(255,255,255,.62); --glass-fill-2:rgba(255,255,255,.76);
-  --glass-edge:rgba(255,255,255,.90); --glass-hi:rgba(255,255,255,.98);
-  --glass-spec:rgba(255,255,255,.44);
-  --glass-blur:18px; --glass-blur-strong:28px;
-  --glass-shadow:0 12px 30px rgba(60,60,67,.14);
+  --glass-fill:rgba(255,255,255,.66); --glass-fill-2:rgba(255,255,255,.78);
+  --glass-content:rgba(255,255,255,.90); --glass-content-2:rgba(255,255,255,.94);
+  --glass-content-edge:rgba(255,255,255,.92); --glass-bar-fill:rgba(255,255,255,.94);
+  --glass-edge:rgba(255,255,255,.92); --glass-hi:rgba(255,255,255,.98);
+  --glass-spec:rgba(255,255,255,.40);
+  --glass-blur:18px; --glass-blur-strong:26px;
+  --glass-shadow:0 12px 30px rgba(60,60,67,.13);
 }
-html[data-glass="on"]{--r:16px;--text-2:rgba(235,235,245,.72);--text-3:rgba(235,235,245,.56)}
-html[data-glass="on"][data-theme="light"]{--text-2:rgba(60,60,67,.68);--text-3:rgba(60,60,67,.54)}
+html[data-glass="on"]{--r:18px;--text-2:rgba(235,235,245,.70);--text-3:rgba(235,235,245,.52)}
+html[data-glass="on"][data-theme="light"]{--text-2:rgba(60,60,67,.64);--text-3:rgba(60,60,67,.50)}
 
-/* 环境光：玻璃下面要有内容可透，纯黑底只会剩一块灰片 */
+/* 环境光：收敛为低饱和的中性色，接近系统壁纸而非霓虹，玻璃有内容可透又不抢内容 */
 html[data-glass="on"] body{
   background-color:var(--bg);
   background-image:
-    linear-gradient(180deg, rgba(28,44,72,.20), rgba(24,24,34,.06) 46%, rgba(52,34,64,.14)),
-    radial-gradient(58% 46% at 10% 4%, rgba(10,132,255,.22), transparent 72%),
-    radial-gradient(52% 42% at 90% 10%, rgba(191,90,242,.13), transparent 72%),
-    radial-gradient(58% 52% at 78% 88%, rgba(48,209,88,.09), transparent 72%),
-    radial-gradient(46% 40% at 18% 92%, rgba(255,159,10,.10), transparent 72%),
-    radial-gradient(42% 34% at var(--gx) var(--gy), rgba(255,255,255,.08), transparent 70%);
+    linear-gradient(180deg, rgba(56,68,88,.16), rgba(18,18,24,.05) 48%, rgba(50,44,62,.12)),
+    radial-gradient(70% 52% at 12% 0%, rgba(120,158,205,.14), transparent 72%),
+    radial-gradient(60% 46% at 90% 10%, rgba(176,158,196,.09), transparent 72%),
+    radial-gradient(64% 54% at 80% 90%, rgba(120,166,158,.07), transparent 72%),
+    radial-gradient(48% 42% at 14% 92%, rgba(206,170,132,.07), transparent 72%),
+    radial-gradient(42% 34% at var(--gx) var(--gy), rgba(255,255,255,.07), transparent 70%);
   background-attachment:fixed;
 }
 html[data-glass="on"][data-theme="light"] body{
   background-image:
-    linear-gradient(180deg, rgba(226,238,255,.42), rgba(255,255,255,.08) 50%, rgba(245,232,255,.34)),
-    radial-gradient(58% 46% at 10% 4%, rgba(0,122,255,.14), transparent 72%),
-    radial-gradient(52% 42% at 90% 10%, rgba(175,82,222,.09), transparent 72%),
-    radial-gradient(58% 52% at 78% 88%, rgba(52,199,89,.09), transparent 72%),
-    radial-gradient(46% 40% at 18% 92%, rgba(255,159,10,.09), transparent 72%),
-    radial-gradient(42% 34% at var(--gx) var(--gy), rgba(255,255,255,.55), transparent 70%);
+    linear-gradient(180deg, rgba(226,236,250,.50), rgba(255,255,255,.10) 50%, rgba(242,236,250,.34)),
+    radial-gradient(70% 52% at 12% 0%, rgba(90,140,200,.11), transparent 72%),
+    radial-gradient(60% 46% at 90% 10%, rgba(170,140,200,.07), transparent 72%),
+    radial-gradient(64% 54% at 80% 90%, rgba(120,180,150,.07), transparent 72%),
+    radial-gradient(48% 42% at 14% 92%, rgba(220,180,130,.07), transparent 72%),
+    radial-gradient(42% 34% at var(--gx) var(--gy), rgba(255,255,255,.50), transparent 70%);
 }
 /* 桌面端光源跟随指针；触屏设备改用缓慢漂移，模拟随设备姿态变化的镜面反射 */
 @media (hover:none){
@@ -497,28 +503,27 @@ html[data-glass="on"][data-theme="light"] body{
   100%{--gx:26%;--gy:86%}
 }
 
-/* 玻璃表面：半透底色 + 饱和模糊 + 顶部镜面高光 + 跟随光源的反射 */
+/* 内容层：按 HIG 不给列表/卡片/图表套 Liquid Glass，改用系统材料（半透明实色、无模糊），
+   只保留极轻的顶部高光与同心细边框，优先保证长文字的对比度与滚动性能。 */
 html[data-glass="on"] :is(.card,.hero,.health,.cal,.plan,.mcell,.chartcard,.note,.review,.sparkcard,.insight,.login-card,.sk-card,.a-box){
-  background-color:var(--glass-fill);
-  background-image:
-    linear-gradient(135deg, rgba(255,255,255,.15), rgba(255,255,255,.035) 38%, transparent 62%),
-    radial-gradient(130% 100% at var(--gx) var(--gy), var(--glass-spec), transparent 66%);
-  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(175%);
-  backdrop-filter:blur(var(--glass-blur)) saturate(175%);
-  border:.5px solid var(--glass-edge);
-  box-shadow:inset 0 1px 0 var(--glass-hi), inset 1px 0 0 rgba(64,200,224,.07),
-    inset -1px 0 0 rgba(255,55,95,.06), inset 0 -1px 0 rgba(255,255,255,.05), var(--glass-shadow);
+  background-color:var(--glass-content);
+  background-image:linear-gradient(160deg, rgba(255,255,255,.055), rgba(255,255,255,.012) 42%, transparent 70%);
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+  border:.5px solid var(--glass-content-edge);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08), 0 6px 18px rgba(0,0,0,.14);
 }
-/* 列表行转透明，否则实色会把卡片玻璃整片盖住 */
+/* 列表行转透明，否则实色会把整块卡片盖住 */
 html[data-glass="on"] :is(.lrow,.addrow,.rowbtn){background-color:transparent}
 html[data-glass="on"] :is(.lrow,.addrow,.rowbtn):active{background-color:var(--fill)}
 html[data-glass="on"] .sheet .card{
-  background-color:var(--glass-fill-2);
-  -webkit-backdrop-filter:blur(8px) saturate(150%);
-  backdrop-filter:blur(8px) saturate(150%);
+  background-color:var(--glass-content-2);
+  -webkit-backdrop-filter:none;backdrop-filter:none;
 }
-/* 悬浮层用更强的玻璃 */
-html[data-glass="on"] :is(.navbar,.tabbar,.sidebar,.sheet,.lib-nav,#toast){
+/* 导航与控制层：只有这一层用 Liquid Glass */
+/* #toast 单独列，避免 :is() 里的 ID 把特异性抬到 (1,1,1)，
+   否则后面的 .tabbar / .navbar / .lib-nav 单独覆盖会全部失效 */
+html[data-glass="on"] :is(.navbar,.tabbar,.sidebar,.sheet,.lib-nav),
+html[data-glass="on"] #toast{
   background-color:var(--glass-fill-2);
   background-image:linear-gradient(160deg, rgba(255,255,255,.16), rgba(255,255,255,.02) 46%, transparent 72%);
   -webkit-backdrop-filter:blur(var(--glass-blur-strong)) saturate(185%);
@@ -526,27 +531,45 @@ html[data-glass="on"] :is(.navbar,.tabbar,.sidebar,.sheet,.lib-nav,#toast){
   border-color:var(--glass-edge);
   box-shadow:inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
 }
-html[data-glass="on"] .sheet{position:relative;border-radius:22px 22px 0 0}
-html[data-glass="on"] .a-box{border-radius:20px}
+/* iOS 26：标签栏是浮在内容之上的玻璃胶囊，不是通栏色块；内容从下方透出 */
+html[data-glass="on"] .tabbar{
+  left:12px;right:12px;bottom:calc(10px + var(--safe-b));
+  background-color:var(--glass-bar-fill);
+  border:.5px solid var(--glass-edge);border-radius:26px;
+  padding-bottom:0;overflow:hidden;
+  box-shadow:0 12px 36px rgba(0,0,0,.40), inset 0 1px 0 var(--glass-hi);
+}
+html[data-glass="on"] .tabbar-in{border-radius:26px}
+html[data-glass="on"] .tab{padding:9px 0 8px;transition:transform .18s cubic-bezier(.32,.72,0,1)}
+html[data-glass="on"] .tab:active{transform:scale(.9)}
+html[data-glass="on"] .sheet{position:relative;border-radius:28px 28px 0 0}
+html[data-glass="on"] .a-box{border-radius:24px}
 html[data-glass="on"] #toast{border-radius:22px;border:.5px solid var(--glass-edge)}
 html[data-glass="on"][data-theme="light"] #toast{
   background-color:rgba(28,28,30,.74);color:#fff;border-color:rgba(255,255,255,.22);
   -webkit-backdrop-filter:blur(var(--glass-blur-strong)) saturate(180%);
   backdrop-filter:blur(var(--glass-blur-strong)) saturate(180%);
 }
-html[data-glass="on"] .navbar{border-bottom:.5px solid var(--glass-edge)}
-html[data-glass="on"] .tabbar{border-top:.5px solid var(--glass-edge)}
+/* 大标题滚动前 navbar 无实色背景，滚动后才出现材质与滚动边缘分隔 */
+html[data-glass="on"] .navbar{background-color:transparent;border-bottom:.5px solid transparent}
+html[data-glass="on"] .navbar.scrolled{background-color:var(--glass-fill);border-bottom-color:var(--glass-edge)}
 html[data-glass="on"] .sidebar{border-right:.5px solid var(--glass-edge)}
-html[data-glass="on"] .lib-nav{border-bottom:.5px solid var(--glass-edge)}
-/* 控件玻璃 */
+html[data-glass="on"] .lib-nav{background-color:transparent;border-bottom:.5px solid var(--glass-edge)}
+/* 控件玻璃：胶囊分段、圆形按钮、按压时的 interactive 缩放反馈 */
 html[data-glass="on"] :is(.seg,.iconbtn,.pill,.sw,.btn-ghost,.quick-q,.a-btn.cancel,.btnblock.gray){
   background-color:var(--glass-fill-2);
   border:.5px solid var(--glass-edge);
   box-shadow:inset 0 1px 0 var(--glass-hi), 0 2px 8px rgba(0,0,0,.12);
 }
 html[data-glass="on"] .sw.on{background-color:var(--green)}
-html[data-glass="on"] .seg{border-radius:12px}
-html[data-glass="on"] .seg button{border-radius:10px}
+html[data-glass="on"] .seg{border-radius:999px;padding:3px}
+html[data-glass="on"] .seg button{border-radius:999px}
+html[data-glass="on"] .seg button.on{background-color:#636366;color:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.22)}
+html[data-glass="on"][data-theme="light"] .seg button.on{background-color:#fff;color:var(--text);
+  box-shadow:0 1px 4px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.90)}
+html[data-glass="on"] :is(.iconbtn,.pill){border-radius:999px;transition:transform .18s cubic-bezier(.32,.72,0,1)}
+html[data-glass="on"] :is(.iconbtn,.pill):active{transform:scale(.9)}
 html[data-glass="on"] .cal-cell{border:.5px solid rgba(255,255,255,.07);text-shadow:0 1px 2px rgba(0,0,0,.35)}
 html[data-glass="on"] .act-badge{box-shadow:0 0 0 1px rgba(255,255,255,.22), 0 2px 8px rgba(0,0,0,.28)}
 html[data-glass="on"] .bk-cover{box-shadow:0 8px 18px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.28)}
@@ -562,6 +585,8 @@ html[data-glass="on"] .login-brand{box-shadow:inset 0 1px 0 rgba(255,255,255,.35
   }
   html[data-glass="on"] :is(.lrow,.addrow,.rowbtn){background-color:var(--card)}
   html[data-glass="on"] .sw.on{background-color:var(--green)}
+  html[data-glass="on"] .seg button.on{background-color:var(--fill-2);box-shadow:none}
+  html[data-glass="on"] .tabbar{border-radius:26px}
 }
 /* 老浏览器没有 backdrop-filter 时不留半透明底 */
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
@@ -569,6 +594,20 @@ html[data-glass="on"] .login-brand{box-shadow:inset 0 1px 0 rgba(255,255,255,.35
     background-color:var(--card);background-image:none;
   }
 }
+
+/* ---------- iOS 系统组件形态（两种外观都生效） ---------- */
+/* Inset grouped 列表：分隔线从内容起点缩进，而不是通栏切到底 */
+.card .lrow:not(:last-child),.card .rowbtn:not(:last-child),.card .dh-row:not(:last-child){
+  border-bottom:0;position:relative}
+.card .lrow:not(:last-child)::after,.card .rowbtn:not(:last-child)::after,
+.card .dh-row:not(:last-child)::after{
+  content:"";position:absolute;left:56px;right:0;bottom:0;height:.5px;
+  background:var(--sep);pointer-events:none}
+.card .dh-row:not(:last-child)::after{left:14px}
+/* 分段控件与按钮的按压反馈 */
+.seg button{transition:background .18s,transform .18s}
+.seg button:active{transform:scale(.96)}
+.navbar.scrolled h1{opacity:1}
 </style>
 </head>
 <body>
