@@ -660,6 +660,39 @@ function toggleTheme() {
   applyTheme(cur === 'light' ? 'dark' : 'light');
 }
 
+/* 液态玻璃：默认开启，用户可在「我的 → 外观」关闭；偏好存本地，与主题独立 */
+const GLASS_KEY = 'lifeboard.glass';
+function glassOn() {
+  try { return localStorage.getItem(GLASS_KEY) !== 'off'; } catch (e) { return true; }
+}
+function applyGlass(on, silent) {
+  document.documentElement.setAttribute('data-glass', on ? 'on' : 'off');
+  try { localStorage.setItem(GLASS_KEY, on ? 'on' : 'off'); } catch (e) {}
+  const sw = document.getElementById('sw-glass');
+  if (sw) sw.classList.toggle('on', !!on);
+  if (!silent) toast(on ? '已开启液态玻璃' : '已关闭液态玻璃');
+}
+function toggleGlass() {
+  applyGlass(document.documentElement.getAttribute('data-glass') !== 'on');
+}
+/* 桌面端让镜面高光跟随指针；触屏设备由 CSS 的 glassLight 动画接管 */
+function initGlassLight() {
+  const fine = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  if (!fine) return;
+  const root = document.documentElement;
+  let raf = 0, last = null;
+  window.addEventListener('pointermove', function (e) {
+    last = e;
+    if (raf) return;
+    raf = requestAnimationFrame(function () {
+      raf = 0;
+      if (!last) return;
+      root.style.setProperty('--gx', (last.clientX / window.innerWidth * 100).toFixed(1) + '%');
+      root.style.setProperty('--gy', (last.clientY / window.innerHeight * 100).toFixed(1) + '%');
+    });
+  }, { passive: true });
+}
+
 /* ==================== 通用片段 ==================== */
 const TABS = [
   { k: 'today', n: '今日', i: 'home' },
@@ -1644,6 +1677,11 @@ function renderMe() {
     '<div class="icbox" style="background:var(--indigo)">' + icon('moon', 17) + '</div>' +
     '<div style="flex:1"><div class="rb-t">深色模式</div><div class="rb-s">关闭则使用浅色</div></div>' +
     '<div class="sw' + (document.documentElement.getAttribute('data-theme') === 'dark' ? ' on' : '') + '" id="sw-theme" data-act="theme"></div>' +
+    '</div>' +
+    '<div class="rowbtn" style="cursor:default">' +
+    '<div class="icbox" style="background:var(--teal)">' + icon('drop', 17) + '</div>' +
+    '<div style="flex:1"><div class="rb-t">液态玻璃</div><div class="rb-s">半透明材质与镜面高光，可随时关闭</div></div>' +
+    '<div class="sw' + (document.documentElement.getAttribute('data-glass') === 'on' ? ' on' : '') + '" id="sw-glass" data-act="glass"></div>' +
     '</div></div>';
 
   const lastExport = (function () { try { return localStorage.getItem('lb.last_export'); } catch (e) { return null; } })();
@@ -1917,6 +1955,7 @@ document.addEventListener('click', async function (ev) {
     case 'filter': S.filter = id; render(); break;
     case 'range': S.range = parseInt(id, 10) || 30; render(); break;
     case 'theme': toggleTheme(); render(); break;
+    case 'glass': toggleGlass(); render(); break;
     case 'chartmode': S.chartMode = id; render(); break;
     case 'healthdetail': S.sparkField = (S.sparkField === eid ? null : eid); render(); break;
 
@@ -2180,6 +2219,8 @@ async function enterApp(session) {
 }
 
 async function boot() {
+  applyGlass(glassOn(), true);
+  initGlassLight();
   installManifest();
   installSW();
   applyTheme((function () { try { return localStorage.getItem('lifeboard.theme') || 'dark'; } catch (e) { return 'dark'; } })(), true);
@@ -2367,7 +2408,8 @@ window.LifeApp = {
   weekReview: weekReview, factorInsights: factorInsights, dataHealth: dataHealth,
   renderFreshness: renderFreshness, swipeMonth: swipeMonth, openQuickSheet: openQuickSheet,
   openCalJumpSheet: openCalJumpSheet, runCorosSync: runCorosSync,
-  patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML
+  patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML,
+  applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight
 };
 
 boot();

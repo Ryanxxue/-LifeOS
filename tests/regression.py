@@ -663,6 +663,29 @@ TEST = r'''
     ok('P1-12：数据陈旧时显示更新时间',
        !q1('#fresh-bar').hidden && /数据更新于 3 小时前/.test(q1('#fresh-bar').textContent));
     S.snapshotAt = oldSnap; window.LifeApp.render();
+
+    /* ==================== iOS 液态玻璃 ==================== */
+    ok('液态玻璃：默认开启且材质 token 已注入',
+       document.documentElement.getAttribute('data-glass') === 'on' &&
+       /--glass-fill/.test(cssText) && /backdrop-filter:blur\(var\(--glass-blur\)\)/.test(cssText));
+    ok('液态玻璃：环境光、镜面高光、光源跟随与减弱透明度降级齐全',
+       /radial-gradient\(58% 46%/.test(cssText) && /--glass-hi/.test(cssText) &&
+       /@property --gx/.test(cssText) && /prefers-reduced-transparency/.test(cssText) &&
+       /@supports not/.test(cssText) && typeof window.LifeApp.initGlassLight === 'function');
+    ok('液态玻璃：浅色主题有独立的玻璃材质参数',
+       /:root\[data-theme="light"\]\{[^}]*--glass-fill:rgba\(255,255,255/.test(cssText));
+    goMe(); await tick();
+    const gsw = q1('#sw-glass[data-act="glass"]');
+    ok('液态玻璃：我的页有可关闭的开关', !!gsw && gsw.classList.contains('on'));
+    if (gsw) { gsw.click(); await tick(); }
+    ok('液态玻璃：关闭后回退实色并写入偏好',
+       document.documentElement.getAttribute('data-glass') === 'off' &&
+       localStorage.getItem('lifeboard.glass') === 'off');
+    const gsw2 = q1('#sw-glass[data-act="glass"]');
+    if (gsw2) { gsw2.click(); await tick(); }
+    ok('液态玻璃：可再次开启',
+       document.documentElement.getAttribute('data-glass') === 'on' &&
+       localStorage.getItem('lifeboard.glass') === 'on');
     goTab('today'); await tick();
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
