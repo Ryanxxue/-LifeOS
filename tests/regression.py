@@ -312,8 +312,11 @@ TEST = r'''
     ok('P1-4 完成率取自次日快照',
        Math.abs(pairs.ys[0] - window.LifeApp.rateOfDay(dayAt(-3))) < 1e-9,
        String(pairs.ys[0]));
-    ok('P1-4 趋势页标注样本量 n 与 p', /n=3/.test(trendTxt) && /p=/.test(trendTxt));
-    ok('P1-4 小样本不给强结论', /样本偏少/.test(trendTxt));
+    ok('P1-4 趋势页保留三张指标卡与两张图表',
+       document.querySelectorAll('#view-trend .mcell').length === 3 &&
+       document.querySelectorAll('#view-trend .chartcard').length === 2 &&
+       !/相关系数/.test(trendTxt));
+    ok('P1-4 趋势页口径说明仍完整', /断口表示当天没有数据/.test(trendTxt));
 
     /* --- P1-5：连点「记一次」 --- */
     goTab('library');
@@ -630,7 +633,7 @@ TEST = r'''
     goTab('today'); await tick();
     const insightEl = q1('#view-today .insight');
     ok('P0-1：今日页给出一句话洞察且可下钻',
-       !!insightEl && /近 7 天|近 7 日常态|还没有今天的身体数据/.test(insightEl.textContent) &&
+       !!insightEl && /近 7 天|近 7 日常态|身体数据/.test(insightEl.textContent) &&
        !!insightEl.getAttribute('data-act'));
     S.health[dayAt(0)] = { sleep_total: 7.2, hrv: 58, resting_hr: 54, training_load: 40 };
     window.LifeApp.render(); await tick();
@@ -714,8 +717,11 @@ TEST = r'''
     ok('P1-7：多因子相关性返回 6 个因子且按 |r| 排序',
        fList.length === 6 &&
        fList.every((x, i, a) => i === 0 || Math.abs(a[i - 1].r || 0) >= Math.abs(x.r || 0)));
-    ok('P1-7：样本不足时给出积累进度而非强结论',
-       /再积累 \d+ 天配对数据/.test(q1('#view-trend').textContent) && /样本偏少/.test(q1('#view-trend').textContent));
+    ok('趋势页：睡眠与次日完成率的关系模块已删除',
+       !/睡眠与次日完成率的关系/.test(q1('#view-trend').textContent) &&
+       !/相关系数 r/.test(q1('#view-trend').textContent) &&
+       !/再积累 \d+ 天配对数据/.test(q1('#view-trend').textContent) &&
+       !/多因子探索/.test(q1('#view-trend').textContent));
 
     /* --- P1-9 快速录入 --- */
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
@@ -774,10 +780,12 @@ TEST = r'''
     ok('iOS 26：组件覆盖未被 :is() 里的 ID 特异性压掉',
        /30, 30, 36/.test(tabBg) && /rgba\(0, 0, 0, 0\)|transparent/.test(navBg),
        'tab=' + tabBg + ' nav=' + navBg);
-    ok('iOS 组件：34px 粗体大标题与滚动收起',
-       /\.head h2\{font-size:34px;font-weight:700/.test(cssText) &&
-       /\.navbar\.scrolled h1\{opacity:1\}/.test(cssText) &&
-       typeof window.LifeApp.initNavScroll === 'function');
+    ok('顶栏：左侧标题与右侧设置项常显在同一行',
+       /\.navbar h1\{font-size:17px;font-weight:600[^\n]*opacity:1/.test(cssText) &&
+       /\.head h2\{display:none\}/.test(cssText) &&
+       q1('#nav-title').textContent.length > 0 &&
+       Math.abs(q1('#nav-title').getBoundingClientRect().top -
+                q1('#btn-quick').getBoundingClientRect().top) < 30);
     ok('iOS 组件：胶囊分段与 inset grouped 缩进分隔线',
        /html\[data-glass="on"\] \.seg\{border-radius:999px/.test(cssText) &&
        /\.card \.lrow:not\(:last-child\)/.test(cssText));
@@ -801,6 +809,55 @@ TEST = r'''
        document.documentElement.getAttribute('data-glass') === 'on' &&
        localStorage.getItem('lifeboard.glass') === 'on');
     goTab('today'); await tick();
+
+    /* --- 本轮：今日提示 / 运动图标 / 微信读书 API 同步 --- */
+    const savedTodayHealth = S.health[dayAt(0)];
+    delete S.health[dayAt(0)];
+    window.LifeApp.render(); await tick();
+    const insEl = q1('#view-today .insight');
+    ok('今日：无当天身体数据时提示可一键同步 COROS',
+       !!insEl && insEl.getAttribute('data-act') === 'corosSync' &&
+       /今天/.test(insEl.textContent) && /COROS/.test(insEl.textContent));
+    if (savedTodayHealth) S.health[dayAt(0)] = savedTodayHealth;
+    window.LifeApp.render();
+
+    const runSvg = window.LifeApp.sportIcon({ name: 'Indoor Run' }, 14);
+    const bikeSvg = window.LifeApp.sportIcon({ name: 'Cycling' }, 14);
+    ok('运动图标：按类型映射为统一线性一套',
+       /M11 5a2 2 0/.test(runSvg) && /M2 18a3 3 0/.test(bikeSvg) &&
+       !/15\.2/.test(runSvg) && runSvg !== bikeSvg);
+
+    ok('微信读书：官方 API 解析器与同步入口就绪',
+       typeof window.Weread.parseShelf === 'function' &&
+       typeof window.Weread.fetchShelf === 'function' &&
+       typeof window.LifeApp.applyShelf === 'function' &&
+       typeof window.Weread.GATEWAY === 'string' &&
+       window.Weread.GATEWAY.indexOf('/api/agent/gateway') > 0);
+    const shelf = window.Weread.parseShelf(JSON.stringify({
+      books: [
+        { bookInfo: { bookId: 'b1', title: '反脆弱', author: '塔勒布' }, progress: 35 },
+        { bookInfo: { bookId: 'b2', title: '新书', author: '某人' }, progress: 100 },
+        { bookInfo: { bookId: 'b1', title: '反脆弱', author: '塔勒布' }, progress: 35 }
+      ]
+    }));
+    ok('微信读书：API 响应解析、bookId 去重与读完状态',
+       shelf.length === 2 && shelf[0].title === '反脆弱' &&
+       shelf[0].external_id === 'b1' && shelf[0].source === 'weread' &&
+       shelf[1].status === 'done', JSON.stringify(shelf));
+    window.LifeApp.openWereadSyncSheet(); await tick();
+    ok('微信读书：同步面板含 Key 配置、API 同步与粘贴响应',
+       !!q1('#wr-key') && !!q1('#sheet [data-act="doweresync"]') &&
+       !!q1('#wr-shelf') && !!q1('#sheet [data-act="doshelfimport"]') &&
+       /跨域|CORS/.test(q1('#sheet').textContent));
+    window.LifeApp.closeSheet();
+    const booksBeforeSync = window.LifeApp.activeBooks().length;
+    await window.LifeApp.applyShelf([
+      { title: 'API 同步的书', author: '作者', external_id: 'wx-1', status: 'reading', progress: 10, source: 'weread' }
+    ]);
+    ok('微信读书：API 书架写入云端并记录同步时间',
+       window.LifeApp.activeBooks().length === booksBeforeSync + 1 &&
+       !!window.LifeApp.S.wereadSyncAt &&
+       window.LifeApp.S.books.some(b => b.title === 'API 同步的书' && b.source === 'weread'));
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
   }

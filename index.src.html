@@ -83,16 +83,17 @@ svg{display:block}
   border-bottom:.5px solid transparent;transition:border-color .2s}
 .navbar.scrolled{border-bottom-color:var(--sep)}
 .navbar-in{max-width:760px;margin:0 auto;padding:10px 16px 8px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.navbar h1{font-size:17px;font-weight:600;letter-spacing:-.02em;margin:0;opacity:0;transition:opacity .2s}
+.navbar h1{font-size:17px;font-weight:600;letter-spacing:-.02em;margin:0;opacity:1}
 .navbar.scrolled h1{opacity:1}
 .navbar .right{display:flex;gap:6px;align-items:center;margin-left:auto}
 .iconbtn{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:var(--text);background:var(--fill)}
 .iconbtn:active{opacity:.6}
 
 .content{max-width:760px;margin:0 auto;padding:0 16px calc(96px + var(--safe-b))}
-.head{padding:6px 0 14px}
-.head .date{color:var(--text-3);font-size:12px;letter-spacing:.03em;margin-bottom:3px}
-.head h2{font-size:34px;font-weight:700;letter-spacing:-.035em;margin:0;line-height:1.12}
+/* 页面标题统一放在顶栏（与右侧操作同一行），内容区只留一行汇总副标题 */
+.head{padding:10px 0 8px}
+.head .date{color:var(--text-3);font-size:12px;letter-spacing:.03em;margin-bottom:0}
+.head h2{display:none}
 
 .card{background:var(--card);border-radius:var(--r);overflow:hidden}
 .gtitle{font-size:12.5px;color:var(--text-3);margin:26px 4px 8px;font-weight:500;letter-spacing:.02em}
@@ -399,10 +400,10 @@ svg{display:block}
 .cal-cell .cnum{line-height:1}
 .cal-cell.hasact::before{content:none !important}
 .cal-cell.today::after{bottom:auto;top:3px}
-.act-badge{display:flex;align-items:center;justify-content:center;width:19px;height:19px;
+.act-badge{display:flex;align-items:center;justify-content:center;width:20px;height:20px;
   border-radius:50%;background:var(--green);color:#fff;position:relative;margin-top:1px;flex:none}
-.act-badge svg{display:block;width:13px;height:13px}
-.act-badge .ic{stroke-width:2.3}
+.act-badge svg{display:block;width:14px;height:14px}
+.act-badge .ic{stroke-width:1.9}
 .act-badge i{position:absolute;top:-5px;right:-7px;font-style:normal;font-size:9px;line-height:1;
   background:var(--card);color:var(--green);border-radius:8px;padding:2px 3px;font-weight:500}
 .cal-cell.l2 .act-badge,.cal-cell.l3 .act-badge,.cal-cell.l4 .act-badge{background:#fff;color:var(--green)}

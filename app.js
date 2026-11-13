@@ -182,7 +182,9 @@ const S = {
   snapshotAt: null,
   ownerId: null,          // 从云端读回的真实 owner，用于校验写入身份
   loadWarnings: 0,        // 本次加载失败的表数量
-  lastWriteError: null    // 最近一次写入失败，「我的 → 数据健康」可见
+  lastWriteError: null,   // 最近一次写入失败，「我的 → 数据健康」可见
+  wereadKey: '',          // 微信读书 API Key（存 app_kv，受 RLS 保护）
+  wereadSyncAt: null      // 上次书架同步时间
 };
 
 /* ==================== 图标 ==================== */
@@ -194,7 +196,7 @@ const P = {
   chart: '<path d="M4 19.4V4.6M4 19.4h16"/><path d="M7.6 15.4l3.6-4.2 3 2.6L19 7.4"/>',
   person: '<circle cx="12" cy="8" r="3.6"/><path d="M4.6 20.2c0-3.7 3.3-5.7 7.4-5.7s7.4 2 7.4 5.7"/>',
   sun: '<circle cx="12" cy="12" r="4.1"/><path d="M12 2.6v2.1M12 19.3v2.1M4.5 4.5l1.5 1.5M18 18l1.5 1.5M2.6 12h2.1M19.3 12h2.1M19.5 4.5 18 6M6 18l-1.5 1.5"/>',
-  run: '<circle cx="15.2" cy="4.8" r="1.7"/><path d="M13 8.2 10 12.4l3 1.9 1.1 4.7"/><path d="M10 12.4 7 13.6l-1.2 4.4"/>',
+  run: '<path d="M11 5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 17l5 1l.75 -1.5"/><path d="M15 21v-4l-4 -3l1 -6"/><path d="M7 12v-3l5 -1l3 3l3 1"/>',
   med: '<circle cx="12" cy="12" r="8.2"/><path d="M12 7.8v4.6l2.6 2.2"/>',
   drop: '<path d="M12 3.2s6.2 6.6 6.2 10.6A6.2 6.2 0 0 1 5.8 13.8C5.8 9.8 12 3.2 12 3.2z"/>',
   bed: '<path d="M3 18.4v-6.2h18v6.2M3 12.2V6.4"/><path d="M6.8 12.2V9.5h5v2.7"/>',
@@ -214,13 +216,16 @@ const P = {
   scale: '<path d="M4.6 20.2V8.4M19.4 20.2V8.4"/><path d="M12 3.2v17"/><path d="M4.6 12.6h14.8"/>',
   moon: '<path d="M20.4 14.6A8.6 8.6 0 0 1 9.4 3.6a8.6 8.6 0 1 0 11 11z"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
-  bike: '<circle cx="5.6" cy="17.2" r="3.3"/><circle cx="18.4" cy="17.2" r="3.3"/><path d="M5.6 17.2 10 8.8h4.4l4 8.4M9.2 8.8h4.6M12 17.2H9"/>',
-  swim: '<circle cx="16.2" cy="6.8" r="1.7"/><path d="M3 13.8c2.2-1.4 4.2-1.4 6.2 0s4 1.4 6.2 0 3.8-1.2 5.6-.2"/><path d="M4 18.4c2.2-1.4 4.2-1.4 6.2 0s4 1.4 6.2 0 3.4-1.1 4.8-.4"/><path d="M8 11 12.6 8.4l3.2 2.4"/>',
-  hike: '<path d="M3 20.4h18"/><path d="M4.4 20.4 9 9.6l3.2 5.2 2-2.6 5.4 8.2"/><circle cx="15.6" cy="5.2" r="1.6"/>',
-  walk: '<circle cx="13.2" cy="4.8" r="1.7"/><path d="M12 8.2 9.6 13l2.8 2 .6 5.2M9.6 13l-2.8 3.4M14.6 10.2l2.8 2.4"/>',
-  strength: '<path d="M4 10v4M6.6 8.4v7.2M17.4 8.4v7.2M20 10v4M6.6 12h10.8"/>',
-  yoga: '<circle cx="12" cy="4.8" r="1.8"/><path d="M12 8v5.6M12 10.4 6.4 8M12 10.4 17.6 8M12 13.6 7.4 18.4M12 13.6l4.6 4.8"/>',
-  row: '<path d="M3 15.6c3-1.3 5.6-1.3 8.4 0s5.6 1.3 9.6 0"/><path d="M5.4 12.4 12 8.6l6.6 3.8M12 8.6V4.2"/>'
+  /* 运动图标统一采用 24×24 线性网格（Tabler Icons outline，MIT）；
+     13–14px 小尺寸下只保留主轮廓，避免细节糊成一团。 */
+  bike: '<path d="M2 18a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/><path d="M16 18a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/><path d="M12 19v-4l-3 -3l5 -4l2 3h3"/><path d="M13 5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>',
+  swim: '<path d="M15 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M6 11l4 -2l3.5 3l-1.5 2"/><path d="M3 16.8c2 -1.4 4 -1.4 6 0s4 1.4 6 0s4 -1.4 6 0"/>',
+  hike: '<path d="M3 20h18l-6.9 -14.6a2.3 2.3 0 0 0 -4.2 0l-6.9 14.6"/><path d="M7.5 11l2 2.5l2.5 -2.5l2 3l2.5 -2"/>',
+  walk: '<path d="M12 4a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M7 21l3 -4"/><path d="M16 21l-2 -4l-3 -3l1 -6"/><path d="M6 12l2 -3l4 -1l3 3l3 1"/>',
+  strength: '<path d="M4 10v4M6.5 8.5v7M17.5 8.5v7M20 10v4M6.5 12h11"/>',
+  yoga: '<path d="M4 20h4l1.5 -3"/><path d="M17 20l-1 -5h-5l1 -7"/><path d="M4 10l4 -1l4 -1l4 1.5l4 1.5"/><path d="M10 5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>',
+  row: '<path d="M3 16c3 -1.2 6 -1.2 9 0s6 1.2 9 0"/><path d="M3 20c3 -1.2 6 -1.2 9 0s6 1.2 9 0"/><path d="M6 12l11 -7"/>',
+  sport: '<path d="M3 12h4l3 8l4 -16l3 8h4"/>'
 };
 function icon(name, size) {
   const d = P[name] || P.home;
@@ -858,7 +863,16 @@ function fieldDelta(field) {
 }
 function insightOf() {
   const h = S.health[TODAY()];
-  if (!h) return { text: '还没有今天的身体数据。连接 COROS 后，这里会给出每日提示。', sub: '基于近 7 日个人基线', sync: true };
+  if (!h) {
+    const last = Object.keys(S.health).sort().pop();
+    const lastTxt = last ? '最近有数据的是 ' + Number(last.slice(5, 7)) + '月' + Number(last.slice(8, 10)) + '日。' : '';
+    const now = new Date();
+    return {
+      text: '今天（' + (now.getMonth() + 1) + '月' + now.getDate() +
+        '日）的身体数据还没同步到本机。' + lastTxt + '点这里从 COROS 拉取。',
+      sub: '同步后自动刷新，不用重开页面', sync: true
+    };
+  }
   let best = null;
   BASE_FIELDS.forEach(f => {
     const d = fieldDelta(f.f);
@@ -1026,7 +1040,7 @@ function openCalJumpSheet() {
 }
 const QUICK_ACTS = [
   { t: '新建打卡项', s: '添加一个每日习惯', i: 'plus', do: 'newhabit', q: '新建打卡项 习惯 habit' },
-  { t: '添加书籍', s: '微信读书导入或手动添加', i: 'book', do: 'addbook', q: '添加书籍 微信读书 weread' },
+  { t: '同步微信读书书架', s: '从官方 API 同步书单', i: 'book', do: 'addbook', q: '同步 书架 微信读书 weread api' },
   { t: '新建学习计划', s: '设定每周目标次数', i: 'pen', do: 'newplan', q: '新建学习计划 目标' },
   { t: '记一次学习', s: '给第一个计划记一次', i: 'check', do: 'logfirst', q: '记一次 学习 记录' },
   { t: '同步身体数据', s: '从 COROS 拉取近 7 天', i: 'refresh', do: 'corosSync', q: '同步 coros 身体数据 睡眠' },
@@ -1143,8 +1157,9 @@ function renderToday() {
     '<div class="hero-txt"><div class="t">' + w[0] + '</div><div class="s">' + w[1] + '</div></div></div>';
 
   const ins = insightOf();
-  html += '<div class="insight" data-act="tab" data-id="' + (ins.sync ? 'me' : 'trend') + '" ' +
-    'role="button" tabindex="0" aria-label="查看身体数据详情">' +
+  html += '<div class="insight" data-act="' + (ins.sync ? 'corosSync' : 'tab') + '"' +
+    (ins.sync ? '' : ' data-id="trend"') + ' ' +
+    'role="button" tabindex="0" aria-label="' + (ins.sync ? '同步今天的身体数据' : '查看身体数据详情') + '">' +
     '<div class="ii">' + icon('med', 16) + '</div>' +
     '<div class="it">' + esc(ins.text) + '<div class="is">' + esc(ins.sub) + '</div></div>' +
     '<div class="go">' + icon('chev', 15) + '</div></div>';
@@ -1367,7 +1382,9 @@ function renderLibrary() {
   /* ---- 左列：书架 ---- */
   let left = '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
     '<span>书架 · ' + list.length + ' 本</span>' +
-    '<button style="color:var(--blue);font-size:13.5px" data-act="addbook">添加</button></div>';
+    '<button style="color:var(--blue);font-size:13.5px" data-act="wereadsync">从微信读书同步</button></div>';
+  left += '<div class="gfoot" style="margin:0 4px 8px">' + esc(wereadStatusText()) +
+    (S.wereadKey ? ' · API 已配置' : ' · 未配置 API Key') + '</div>';
   left += '<div class="seg">' +
     [['all', '全部'], ['reading', '在读'], ['done', '读完']].map(x =>
       '<button class="' + (f === x[0] ? 'on' : '') + '" data-act="filter" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div>';
@@ -1602,10 +1619,6 @@ function renderTrend() {
   const prevSleep = avgMetric(sleepGet, S.range, S.range);
   const prevHrv = avgMetric(hrvGet, S.range, S.range);
 
-  const pairs = corrPairs(days);
-  const r = pairs.n >= 3 ? pearson(pairs.xs, pairs.ys) : null;
-  const p = (r === null ? null : pValue(r, pairs.n));
-
   let html = '<div class="head"><div class="date">近 ' + S.range + ' 天</div><h2>趋势</h2></div>';
 
   html += '<div class="seg">' + [30, 60, 90].map(n =>
@@ -1660,43 +1673,6 @@ function renderTrend() {
       { get: rhrGet, min: lo, max: hi, color: 'var(--pink)', fmt: v => String(Math.round(v)) }
     ], { hit: true }) + '</div><div class="gfoot" style="margin-left:6px">两条线共用同一纵轴范围（' + lo + '–' + hi + '），断口表示当天没有数据。</div>';
 
-  let corr;
-  if (r === null) {
-    corr = '<div style="font-size:13.5px;color:var(--text-2);line-height:1.6">样本不足。需要至少 3 天「当晚有睡眠数据 + 次日有打卡动作」才能计算，当前只有 ' + pairs.n + ' 天。</div>';
-  } else {
-    let verdict;
-    if (pairs.n < 8) {
-      verdict = '样本偏少（n=' + pairs.n + '），这个数值仅供参考，暂不下结论。继续积累到 8 天以上再看。';
-    } else if (p !== null && p < 0.05) {
-      verdict = '在 0.05 水平上显著' + (r > 0 ? '正相关：睡得更久的当晚之后，次日打卡完成率往往更高。'
-                                             : '负相关：睡得更久的当晚之后，次日打卡完成率反而偏低。') +
-        '但这只是统计关联，不代表因果。';
-    } else {
-      verdict = '未达到统计显著（p=' + (p === null ? '—' : p.toFixed(2)) + ' ≥ 0.05），不能据此认为睡眠长短与次日完成率有关系。';
-    }
-    corr = '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">' +
-      '<div style="font-size:26px;font-weight:500;letter-spacing:-.02em">' + (r >= 0 ? '+' : '') + r.toFixed(2) + '</div>' +
-      '<div style="font-size:13px;color:var(--text-2)">相关系数 r · n=' + pairs.n + ' · p=' +
-      (p === null ? '—' : p.toFixed(3)) + '</div></div>' +
-      '<div style="font-size:13px;color:var(--text-2);line-height:1.65;margin-top:8px">' + verdict + '</div>';
-  }
-  let extra;
-  if (pairs.n < 8) {
-    extra = '<div style="margin-top:14px;border-top:.5px solid var(--sep);padding-top:12px">' +
-      '<div style="font-size:12.5px;color:var(--text-2)">再积累 ' + (8 - pairs.n) + ' 天配对数据即可查看多因子关联（当前 n=' + pairs.n + '/8）</div>' +
-      '<div class="bar" style="margin:8px 0 0"><i style="width:' + Math.min(100, Math.round(pairs.n / 8 * 100)) + '%"></i></div></div>';
-  } else {
-    extra = '<div style="margin-top:14px;border-top:.5px solid var(--sep);padding-top:10px">' +
-      '<div style="font-size:12px;color:var(--text-2);margin-bottom:6px">多因子探索（按 |r| 排序）</div>' +
-      factorInsights(days).map(x => '<div class="lrow" style="cursor:default;padding:8px 0">' +
-        '<div class="lbody"><div class="lrow-t" style="font-size:13px">' + x.label + '</div>' +
-        '<div class="lrow-sub">n=' + x.n + ' · r=' + (x.r === null ? '—' : (x.r >= 0 ? '+' : '') + x.r.toFixed(2)) +
-        ' · p=' + (x.p === null ? '—' : x.p.toFixed(3)) + '</div></div></div>').join('') +
-      '<div class="gfoot" style="margin-top:6px">探索性分析，未做多重比较校正；相关不代表因果。</div></div>';
-  }
-  html += '<div class="gtitle">睡眠与次日完成率的关系</div><div class="card" style="padding:16px">' + corr + extra +
-    '</div><div class="gfoot">口径：睡眠取当晚，完成率取次日；仅纳入有睡眠数据且次日有有效打卡项、有打卡动作的日子。相关不等于因果。</div>';
-
   $('#view-trend').innerHTML = html;
 }
 
@@ -1745,10 +1721,15 @@ function renderMe() {
     '<div class="rb-s">' + (coros.connected ? ('已连接 · ' + (coros.lastSync ? '上次同步 ' + coros.lastSync : '尚未同步')) : '未连接，点此授权') + '</div></div>' +
     '<div class="dot' + (coros.connected ? '' : ' off') + '"></div></button>' +
 
-    '<button class="rowbtn" data-act="import">' +
+    '<button class="rowbtn" data-act="wereadsync">' +
     '<div class="icbox" style="background:var(--teal)">' + icon('bookop', 17) + '</div>' +
-    '<div style="flex:1;min-width:0"><div class="rb-t">微信读书</div>' +
-    '<div class="rb-s">粘贴导入划线</div></div>' +
+    '<div style="flex:1;min-width:0"><div class="rb-t">微信读书 API</div>' +
+    '<div class="rb-s">' + esc(wereadStatusText()) + (S.wereadKey ? ' · 已配置 Key' : ' · 未配置 Key') + '</div></div>' +
+    '<div class="dot' + (S.wereadKey ? '' : ' off') + '"></div></button>' +
+    '<button class="rowbtn" data-act="import">' +
+    '<div class="icbox" style="background:var(--fill-2);color:var(--text)">' + icon('pen', 16) + '</div>' +
+    '<div style="flex:1;min-width:0"><div class="rb-t">粘贴划线导入</div>' +
+    '<div class="rb-s">手动补充单本书的划线笔记</div></div>' +
     '<div class="chev">' + icon('chev', 15) + '</div></button>' +
 
     '<button class="rowbtn" data-act="corosSync">' +
@@ -1865,7 +1846,8 @@ function askConfirm(opts) {
 /* 离线时禁止一切写库 / 授权动作，只保留浏览与导出 */
 const WRITE_ACTS = new Set(['toggle', 'daytoggle', 'savehabit', 'delhabit', 'savemanualbook',
   'delnote', 'delbook', 'togglebookstatus', 'saveplan', 'logstudy', 'delplan', 'doimport',
-  'corosConnect', 'corosSync', 'restore', 'importbackup', 'undo']);
+  'corosConnect', 'corosSync', 'restore', 'importbackup', 'undo',
+  'savewereadkey', 'doweresync', 'doshelfimport']);
 
 /* ==================== 新建/编辑打卡项 ==================== */
 const ICON_CHOICES = ['sun', 'book', 'run', 'med', 'pen', 'drop', 'bed', 'heart', 'flame', 'scale'];
@@ -1915,11 +1897,14 @@ async function submitHabit(editId) {
 /* ==================== 添加书籍 ==================== */
 function openAddBookSheet() {
   const html = '<div class="grabber"></div>' +
-    '<div class="sheet-h"><div class="t">添加书籍</div><button data-act="closesheet">取消</button></div>' +
+    '<div class="sheet-h"><div class="t">添加 / 同步</div><button data-act="closesheet">取消</button></div>' +
     '<div class="sheet-body">' +
     '<div class="card">' +
-    '<button class="rowbtn" data-act="import"><div class="icbox" style="background:var(--teal)">' + icon('bookop', 17) + '</div>' +
-    '<div style="flex:1"><div class="rb-t">从微信读书导入</div><div class="rb-s">粘贴划线内容，自动识别书名与笔记</div></div>' +
+    '<button class="rowbtn" data-act="wereadsync"><div class="icbox" style="background:var(--teal)">' + icon('refresh', 17) + '</div>' +
+    '<div style="flex:1"><div class="rb-t">从微信读书 API 同步书架</div><div class="rb-s">' + esc(wereadStatusText()) + ' · 推荐</div></div>' +
+    '<div class="chev">' + icon('chev', 15) + '</div></button>' +
+    '<button class="rowbtn" data-act="import"><div class="icbox" style="background:var(--fill-2);color:var(--text)">' + icon('bookop', 17) + '</div>' +
+    '<div style="flex:1"><div class="rb-t">粘贴划线导入</div><div class="rb-s">手动补充单本书的划线笔记</div></div>' +
     '<div class="chev">' + icon('chev', 15) + '</div></button>' +
     '<button class="rowbtn" data-act="manualbook"><div class="icbox" style="background:var(--blue)">' + icon('pen', 17) + '</div>' +
     '<div style="flex:1"><div class="rb-t">手动添加</div><div class="rb-s">只填书名和作者</div></div>' +
@@ -2012,6 +1997,119 @@ async function doImport() {
     toast('「' + book.title + '」新增 ' + res.added + ' 条划线' +
       (res.skipped ? '，跳过 ' + res.skipped + ' 条重复' : ''));
   } catch (e) { toast('导入失败：' + (e.message || '网络异常')); }
+}
+
+/* ==================== 微信读书 API 同步 ==================== */
+const WEREAD_HINT = '同步微信读书书架';
+
+async function loadWereadState() {
+  try {
+    const cfg = await kvGet('weread_api_key');
+    S.wereadKey = cfg && cfg.key ? String(cfg.key) : '';
+    const st = await kvGet('weread_last_sync');
+    S.wereadSyncAt = st && st.at ? String(st.at) : null;
+  } catch (e) { /* app_kv 读不到时保持默认，不阻断启动 */ }
+}
+
+function wereadStatusText() {
+  if (!S.wereadSyncAt) return '尚未同步';
+  const d = new Date(S.wereadSyncAt);
+  if (isNaN(d.getTime())) return '已同步';
+  return '上次同步 ' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
+    String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+function openWereadSyncSheet() {
+  const html = '<div class="grabber"></div>' +
+    '<div class="sheet-h"><div class="t">微信读书同步</div><button data-act="closesheet">关闭</button></div>' +
+    '<div class="sheet-body">' +
+    '<div class="gfoot" style="margin:0 4px 12px">书架数据来自微信读书官方 Agent API（/shelf/sync）。' +
+    '网关只放行 weread.qq.com 跨域，浏览器直连通常会被拦截；此时在 WorkBuddy 对话里发送「' +
+    WEREAD_HINT + '」，由服务端代拉后写进你的云端书架。</div>' +
+    '<div class="card" style="padding:14px">' +
+    '<div class="lbl" style="margin-top:0">API Key（wrk- 开头，保存在你的云端账户）</div>' +
+    '<input type="text" id="wr-key" placeholder="wrk-…" value="' + esc(S.wereadKey || '') + '">' +
+    '<div style="margin-top:10px"><button class="btnblock blue" data-act="savewereadkey">保存 Key</button></div>' +
+    '<div style="margin-top:8px"><button class="btnblock gray" data-act="doweresync">立即从 API 同步</button></div>' +
+    '<div style="text-align:center;margin-top:10px">' +
+    '<button style="color:var(--blue);font-size:13.5px" data-act="copyweresync">复制同步指令</button></div>' +
+    '</div>' +
+    '<div class="lbl">或粘贴 API 返回的 JSON（/shelf/sync 响应）</div>' +
+    '<textarea id="wr-shelf" placeholder=\'{"books":[{"bookInfo":{"title":"书名","author":"作者"},"progress":35}]}\'></textarea>' +
+    '<div style="margin-top:10px"><button class="btnblock gray" data-act="doshelfimport">解析并同步书架</button></div>' +
+    '<div class="gfoot" style="margin:12px 4px 0">' + esc(wereadStatusText()) +
+    ' · 当前书架 ' + activeBooks().length + ' 本</div>' +
+    '</div>';
+  openSheet(html);
+}
+
+async function saveWereadKey() {
+  const key = ($('#wr-key') && $('#wr-key').value || '').trim();
+  if (!key) { toast('请填写 API Key'); return; }
+  try {
+    await kvSet('weread_api_key', { key: key });
+    S.wereadKey = key;
+    toast('API Key 已保存');
+  } catch (e) { noteWriteError('savewereadkey', e); toast('保存失败：' + (e.message || ''), null, 6000); }
+}
+
+/* 把 API 书架合并进云端：按 external_id（bookId）优先、书名兜底去重，
+   已有书只补作者/来源/进度，绝不覆盖手动标记或删除状态。 */
+async function applyShelf(list) {
+  let added = 0, updated = 0;
+  for (const b of list) {
+    const hit = activeBooks().find(x =>
+      (b.external_id && x.external_id && String(x.external_id) === String(b.external_id)) ||
+      x.title === b.title);
+    if (hit) {
+      const patch = { source: 'weread' };
+      if (b.author && !hit.author) patch.author = b.author;
+      if (b.external_id && !hit.external_id) patch.external_id = b.external_id;
+      if (b.status !== hit.status) { patch.status = b.status; patch.progress = b.progress; }
+      if (Object.keys(patch).length > 1) { await patchBook(hit.id, patch); updated++; }
+    } else {
+      await saveBook({
+        title: b.title, author: b.author, status: b.status,
+        progress: b.progress, source: 'weread', external_id: b.external_id
+      });
+      added++;
+    }
+  }
+  const at = new Date().toISOString();
+  await kvSet('weread_last_sync', { at: at, count: list.length, added: added, updated: updated });
+  S.wereadSyncAt = at;
+  await loadAll(); render(); closeSheet();
+  toast('已同步 ' + list.length + ' 本 · 新增 ' + added + ' · 更新 ' + updated);
+  return { added: added, updated: updated };
+}
+
+async function runWereadSync() {
+  if (!window.Weread || !Weread.fetchShelf) { toast('同步模块未就绪'); return; }
+  const key = ($('#wr-key') && $('#wr-key').value || '').trim() || S.wereadKey;
+  if (!key) { toast('请先填写并保存 API Key'); return; }
+  toast('正在从微信读书同步…');
+  try {
+    const list = await Weread.fetchShelf(key);
+    await applyShelf(list);
+  } catch (e) {
+    noteWriteError('doweresync', e);
+    toast('浏览器直连失败（网关 CORS 限制）。请在 WorkBuddy 里发送「' + WEREAD_HINT +
+      '」，或粘贴 API 响应 JSON。', null, 7000);
+  }
+}
+
+async function doShelfImport() {
+  const raw = ($('#wr-shelf') && $('#wr-shelf').value || '').trim();
+  if (!raw) { toast('请先粘贴 API 响应'); return; }
+  const list = window.Weread ? Weread.parseShelf(raw) : [];
+  if (!list.length) { toast('没有解析到书籍，请检查 JSON 格式'); return; }
+  try { await applyShelf(list); }
+  catch (e) { noteWriteError('doshelfimport', e); toast('同步失败：' + (e.message || ''), null, 6000); }
+}
+
+async function copyWereadSyncHint() {
+  try { await navigator.clipboard.writeText(WEREAD_HINT); toast('已复制，粘贴到 WorkBuddy 对话即可同步'); }
+  catch (e) { toast('请手动复制：' + WEREAD_HINT, null, 6000); }
 }
 
 /* ==================== 动作分发 ==================== */
@@ -2185,6 +2283,11 @@ document.addEventListener('click', async function (ev) {
 
     case 'import': openImportSheet(); break;
     case 'doimport': await doImport(); break;
+    case 'wereadsync': openWereadSyncSheet(); break;
+    case 'savewereadkey': await saveWereadKey(); break;
+    case 'doweresync': await runWereadSync(); break;
+    case 'doshelfimport': await doShelfImport(); break;
+    case 'copyweresync': await copyWereadSyncHint(); break;
     case 'demofill': {
       const ta = $('#wr-text');
       if (ta) ta.value = '反脆弱 - 塔勒布\n允许自己犯错，是反脆弱的第一步。\n系统的韧性来自冗余，而不是精确。\n我们高估了知识，低估了行动。';
@@ -2293,6 +2396,7 @@ async function enterApp(session) {
   }
   try {
     await loadAll();
+    await loadWereadState();
     S.offline = false;
     S.loading = false;
     saveSnapshot();
@@ -2329,10 +2433,27 @@ function initNavScroll() {
   update();
 }
 
+/* COROS 把今天的数据写进云端后，页面可能还停在旧的内存快照；
+   回到前台时若今天没有身体数据，静默重新拉一次（60 秒节流）。 */
+let lastAutoRefresh = 0;
+async function autoRefreshToday() {
+  if (S.offline || !S.user || S.health[TODAY()]) return;
+  if (Date.now() - lastAutoRefresh < 60000) return;
+  lastAutoRefresh = Date.now();
+  try { await loadAll(); render(); } catch (e) { /* 静默失败，不打断使用 */ }
+}
+function initAutoRefresh() {
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') autoRefreshToday();
+  });
+  window.addEventListener('focus', autoRefreshToday);
+}
+
 async function boot() {
   try { S.lastWriteError = JSON.parse(localStorage.getItem('lb.lastWriteError') || 'null'); } catch (e) {}
   applyGlass(glassOn(), true);
   initNavScroll();
+  initAutoRefresh();
   initGlassLight();
   installManifest();
   installSW();
@@ -2523,7 +2644,9 @@ window.LifeApp = {
   openCalJumpSheet: openCalJumpSheet, runCorosSync: runCorosSync,
   patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML,
   applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight,
-  initNavScroll: initNavScroll
+  initNavScroll: initNavScroll, autoRefreshToday: autoRefreshToday,
+  loadWereadState: loadWereadState, openWereadSyncSheet: openWereadSyncSheet,
+  applyShelf: applyShelf, wereadStatusText: wereadStatusText
 };
 
 boot();
