@@ -97,6 +97,21 @@ def read(name):
         return f.read()
 
 
+def minify(code, name):
+    """用固定版本的 terser 压缩自有 JS（不含第三方 SDK）。
+    失败时回退原文，保证构建不会因为工具缺失而中断。"""
+    try:
+        r = subprocess.run(
+            ['npx', '--yes', 'terser@5.51.2', '--compress', '--mangle', '--comments', 'false'],
+            input=code, capture_output=True, text=True, timeout=90)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout
+        print('  警告：%s 压缩失败，使用原文' % name)
+    except Exception as e:
+        print('  警告：无法调用 terser（%s），%s 使用原文' % (e, name))
+    return code
+
+
 def data_uri(name):
     with open(name, 'rb') as f:
         return 'data:image/png;base64,' + base64.b64encode(f.read()).decode()
@@ -108,7 +123,12 @@ def build_all():
         tag = '<script src="%s"></script>' % name
         if tag not in html:
             raise SystemExit('index.src.html 缺少引入标签：' + name)
-        html = html.replace(tag, '<script>\n' + read(name) + '\n</script>')
+        code = read(name)
+        if name in OWN_JS:
+            code = minify(code, name)
+        # 稳定注入点：压缩后代码格式会变，回归测试靠这个注释定位 app 脚本
+        prefix = '<!--__LB_APP__-->\n' if name == 'app.js' else ''
+        html = html.replace(tag, prefix + '<script>\n' + code + '\n</script>')
     if ASSET_TAG not in html:
         raise SystemExit('index.src.html 缺少资源占位符 ' + ASSET_TAG)
 
@@ -119,12 +139,9 @@ def build_all():
          SW_TEMPLATE + read(os.path.basename(__file__))).encode('utf-8')
     ).hexdigest()[:10]
 
-    icons = {'192': data_uri('icon-192.png'), '512': data_uri('icon-512.png')}
-    assets = ('<script>window.__LB_ICONS__=' +
-              json.dumps(icons, ensure_ascii=False, separators=(',', ':')) +
-              ';window.__LB_BUILD__=' + json.dumps(digest) + ';</script>')
+    # 192/512 不再内联：运行时用带 sharecode 的同源 URL（iconUrl），省下约 130 KB
+    assets = '<script>window.__LB_BUILD__=' + json.dumps(digest) + ';</script>'
     html = html.replace(ASSET_TAG, assets)
-    html = html.replace('href="icon-180.png"', 'href="' + data_uri('icon-180.png') + '"')
     # head 解析阶段就会请求 <link rel=manifest>；相对路径不带 sharecode 必然 403。
     # 这里内联一个极小的占位 manifest，运行时 installManifest() 再用带动态 start_url 的
     # blob manifest 覆盖它（完整图标也由运行时注入），全程不产生 403 请求。
@@ -138,9 +155,10 @@ def build_all():
         'description': '打卡、阅读、学习与身体数据，一个面板全部收好。',
         'start_url': '/', 'scope': '/', 'display': 'standalone', 'orientation': 'portrait',
         'background_color': '#000000', 'theme_color': '#000000',
+        # 该文件不被页面直接引用（运行时用 blob manifest），保留为部署校验用的小文件
         'icons': [
-            {'src': icons['192'], 'sizes': '192x192', 'type': 'image/png', 'purpose': 'any'},
-            {'src': icons['512'], 'sizes': '512x512', 'type': 'image/png', 'purpose': 'any maskable'}
+            {'src': 'icon-192.png', 'sizes': '192x192', 'type': 'image/png', 'purpose': 'any'},
+            {'src': 'icon-512.png', 'sizes': '512x512', 'type': 'image/png', 'purpose': 'any maskable'}
         ]
     }
     return {
@@ -177,8 +195,11 @@ def check():
         problems.append('PWA 图标仍是相对路径，线上会 403，必须内联为 data URI')
     if 'href="manifest.webmanifest"' in html:
         problems.append('head 的 manifest 仍是相对路径，JS 执行前会先发一次 403 请求')
-    if '__LB_ICONS__' not in html or '__LB_BUILD__' not in html:
-        problems.append('缺少内联图标/构建号常量')
+    if '__LB_BUILD__' not in html:
+        problems.append('缺少构建号常量')
+    if len(html.encode('utf-8')) > 340 * 1024:
+        problems.append('index.html 超过 340 KB 性能预算：%.1f KB' %
+                        (len(html.encode('utf-8')) / 1024))
     if 'serviceWorker' not in html:
         problems.append('未注册 service worker')
     if not os.path.exists('tests/regression.py'):

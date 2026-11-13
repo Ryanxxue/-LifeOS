@@ -79,6 +79,7 @@ MOCK = r'''
         return String(rv) === String(f[2]);
       }
       if (f[1] === 'gte') return String(rv) >= String(f[2]);
+      if (f[1] === 'lte') return String(rv).slice(0, 10) <= String(f[2]);
       return true;
     });
     if (query.op === 'select') {
@@ -131,6 +132,7 @@ MOCK = r'''
     select() { return this; }
     order() { return this; }
     gte(k, v) { this.filters.push([k, 'gte', v]); return this; }
+    lte(k, v) { this.filters.push([k, 'lte', v]); return this; }
     eq(k, v) { this.filters.push([k, 'eq', v]); return this; }
     limit(n) { this.lim = n; return this; }
     insert(rows) { this.op = 'insert'; this.payload = Array.isArray(rows) ? rows : [rows]; return this; }
@@ -157,7 +159,8 @@ MOCK = r'''
   window.__STORE__ = store;
   window.__dayAt__ = dayAt;
   /* 故障注入：模拟「云端把写入落到匿名身份」与「单张表查询失败」 */
-  window.__MOCK__ = { forceOwner: null, failTable: null, hideLastInserted: false, lastInsertId: null };
+  window.__MOCK__ = { forceOwner: null, failTable: null, hideLastInserted: false, lastInsertId: null,
+    queries: [] };
 })();
 '''
 
@@ -402,9 +405,15 @@ TEST = r'''
     const mfLink = q1('link[rel=manifest]');
     let mf = null;
     try { if (mfLink) mf = await (await fetch(mfLink.href)).json(); } catch (e) {}
-    ok('P2-1 manifest 图标全部内联为 data URI',
-       !!mf && mf.icons.length === 2 && mf.icons.every(i => i.src.indexOf('data:image/png;base64,') === 0),
-       mf && mf.icons.length);
+    ok('P2-1 manifest 图标走同源 URL（不再内联，首屏减重）',
+       !!mf && mf.icons.length === 2 && mf.icons.every(i =>
+         i.src.indexOf('/icon-') > 0 && i.src.indexOf('data:') !== 0),
+       mf && mf.icons.map(i => i.src.slice(0, 46)).join('|'));
+    const oldSc = localStorage.getItem('lb.sharecode');
+    localStorage.setItem('lb.sharecode', 'TESTSC');
+    ok('P2-1 图标 URL 带访问码，避免发布站点 403',
+       /sharecode=TESTSC/.test(window.LifeApp.iconUrl(512)), window.LifeApp.iconUrl(512));
+    if (oldSc === null) localStorage.removeItem('lb.sharecode'); else localStorage.setItem('lb.sharecode', oldSc);
     ok('P2-1 start_url 使用 appBase()', !!mf && mf.start_url === window.LifeApp.appBase(), mf && mf.start_url);
     ok('P2-1 构建号已注入', /^[0-9a-f]{10}$/.test(String(window.__LB_BUILD__ || '')), window.__LB_BUILD__);
     ok('P2-1 service worker 注册入口存在', typeof window.LifeApp.installSW === 'function');
@@ -417,7 +426,7 @@ TEST = r'''
        'native=' + (window.__nativeConfirmCalled || 0));
 
     /* --- P2-2 骨架屏 / 离线快照 --- */
-    window.LifeApp.renderSkeleton();
+    window.LifeApp.renderSkeleton('today');
     ok('P2-2 骨架屏可渲染', !!q1('#view-today .sk-wrap'));
     window.LifeApp.render();
     window.LifeApp.saveSnapshot();
@@ -858,6 +867,119 @@ TEST = r'''
        window.LifeApp.activeBooks().length === booksBeforeSync + 1 &&
        !!window.LifeApp.S.wereadSyncAt &&
        window.LifeApp.S.books.some(b => b.title === 'API 同步的书' && b.source === 'weread'));
+    /* ==================== 交互可达性 / 离线 / 安全 / 打磨 ==================== */
+    goTab('today'); await tick();
+    const ckRow = q1('#view-today .lrow[data-act="toggle"]');
+    ok('交互：打卡行可聚焦且角色/状态可读',
+       !!ckRow && ckRow.getAttribute('role') === 'checkbox' && ckRow.getAttribute('tabindex') === '0' &&
+       /^(true|false)$/.test(ckRow.getAttribute('aria-checked') || ''),
+       ckRow && (ckRow.getAttribute('role') + '/' + ckRow.getAttribute('aria-checked')));
+    if (ckRow) {
+      const a0 = ckRow.getAttribute('aria-checked');
+      ckRow.focus();
+      ckRow.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await tick();
+      const ckRow2 = q1('#view-today .lrow[data-act="toggle"]');
+      ok('交互：Enter 键可打卡且 aria-checked 同步',
+         !!ckRow2 && ckRow2.getAttribute('aria-checked') !== a0,
+         a0 + ' -> ' + (ckRow2 && ckRow2.getAttribute('aria-checked')));
+      if (ckRow2) { ckRow2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick(); }
+    }
+    const todayTxt = q1('#view-today').textContent;
+    ok('交互：打卡列表排在健康四格之前',
+       todayTxt.indexOf('今日打卡') > 0 && todayTxt.indexOf('今日打卡') < todayTxt.indexOf('睡眠'),
+       todayTxt.indexOf('今日打卡') + '/' + todayTxt.indexOf('睡眠'));
+
+    goTab('calendar'); await tick();
+    const prev = q1('#view-calendar [data-act="calprev"]');
+    if (prev) {
+      prev.focus(); prev.click(); await tick();
+      ok('交互：整页重绘后焦点回到原按钮',
+         !!document.activeElement && document.activeElement.getAttribute('data-act') === 'calprev',
+         document.activeElement && document.activeElement.getAttribute('data-act'));
+    } else ok('交互：整页重绘后焦点回到原按钮', false, 'no calprev');
+
+    ok('交互：顶栏入口改为同步，不再占用主题切换',
+       !!q1('#btn-sync') && q1('#btn-sync').getAttribute('data-act') === 'corosSync' && !q1('#btn-theme'));
+    window.LifeApp.renderSkeleton('trend');
+    ok('交互：各标签页首进有骨架屏而非白屏',
+       !!q1('#view-trend .sk-wrap') && !q1('#view-trend').hidden);
+    window.LifeApp.render();
+
+    /* --- 备份凭据过滤 --- */
+    store.app_kv.push({ id: 9001, owner_id: 'u1', k: 'weread_api_key', v: { key: 'wrk-secret' } });
+    store.app_kv.push({ id: 9002, owner_id: 'u1', k: 'coros_auth', v: { access_token: 'tok' } });
+    store.app_kv.push({ id: 9003, owner_id: 'u1', k: 'theme', v: 'dark' });
+    const bk = await window.LifeApp.fetchBackupRows();
+    ok('安全：备份排除微信读书 Key 与 COROS 令牌，保留普通键',
+       !(bk.app_kv || []).some(r => /key|coros|token/i.test(String(r.k))) &&
+       (bk.app_kv || []).some(r => r.k === 'theme'),
+       (bk.app_kv || []).map(r => r.k).join(','));
+
+    /* --- 离线打卡队列 --- */
+    goTab('today');
+    S.offline = true; window.LifeApp.render(); await tick();
+    const offRow = q1('#view-today .lrow[data-act="toggle"]');
+    if (offRow) {
+      offRow.click(); await tick();
+      const pendN = Object.keys(S.pending || {}).length;
+      ok('离线：打卡进入本机队列并标记待同步',
+         pendN >= 1 && !!q1('#view-today .lrow.pending') &&
+         /联网后自动同步/.test(q1('#toast').textContent) &&
+         /待同步/.test(q1('#offline-bar').textContent),
+         'pending=' + pendN + ' bar=' + q1('#offline-bar').textContent);
+      S.offline = false;
+      await window.LifeApp.flushPending(); await tick();
+      ok('离线：联网后队列回放并清空',
+         Object.keys(S.pending || {}).length === 0 && !q1('#view-today .lrow.pending'),
+         'left=' + Object.keys(S.pending || {}).length);
+    } else ok('离线：打卡进入本机队列并标记待同步', false, 'no habit row');
+    S.offline = false; localStorage.removeItem('lb.pendingCheckins.v1'); S.pending = {};
+
+    /* --- 表单草稿 --- */
+    goMe(); await tick();
+    const addHabit = q1('#view-me [data-act="newhabit"]');
+    if (addHabit) {
+      addHabit.click(); await tick();
+      const inp = q1('#ah-name');
+      inp.value = '草稿测试项';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      window.LifeApp.closeSheet(); await tick();
+      q1('#view-me [data-act="newhabit"]').click(); await tick();
+      ok('打磨：关闭表单后草稿不丢',
+         !!q1('#ah-name') && q1('#ah-name').value === '草稿测试项',
+         q1('#ah-name') && q1('#ah-name').value);
+      window.LifeApp.closeSheet();
+      window.LifeApp.draftClear('habit');
+    } else ok('打磨：关闭表单后草稿不丢', false, 'no newhabit');
+
+    /* --- 微信读书面板主路径 --- */
+    q1('#view-me [data-act="wereadsync"]').click(); await tick();
+    const primary = q1('#sheet .btnblock.blue');
+    ok('交互：微信读书主路径是粘贴同步，直连收进高级区',
+       !!primary && /解析并同步书架/.test(primary.textContent) &&
+       !!q1('#sheet details.adv') && !!q1('#sheet details.adv [data-act="doweresync"]'));
+    window.LifeApp.closeSheet();
+
+    /* --- 连续删除可逐条撤销 --- */
+    goTab('library'); await tick();
+    const anyBook = window.LifeApp.activeBooks()[0];
+    if (anyBook) { window.LifeApp.openBook(anyBook.id); await tick(); }
+    const n0 = window.LifeApp.activeNotes().length;
+    let del = q1('#sheet [data-act="delnote"]');
+    if (del && n0 >= 2) {
+      del.click(); await tick();
+      del = q1('#sheet [data-act="delnote"]');
+      if (del) { del.click(); await tick(); }
+      const undos = document.querySelectorAll('#toast .undo');
+      if (undos.length) undos[0].click(); await tick();
+      const u2 = q1('#toast .undo');
+      if (u2) u2.click(); await tick();
+      ok('打磨：连续删除可逐条撤销',
+         window.LifeApp.activeNotes().length === n0,
+         n0 + ' -> ' + window.LifeApp.activeNotes().length);
+    } else ok('打磨：连续删除可逐条撤销', false, 'notes=' + n0);
+    window.LifeApp.closeSheet();
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
   }
@@ -895,7 +1017,7 @@ def main():
     with open(SRC, encoding='utf-8') as f:
         page = f.read()
 
-    marker = "<script>\n(function () {\n'use strict';\n\n/* ==================== 工具 ==================== */"
+    marker = '<!--__LB_APP__-->'
     if marker not in page:
         print('未找到 app.js 注入点，检查 build.py 产物')
         return 1

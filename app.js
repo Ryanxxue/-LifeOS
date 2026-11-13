@@ -21,16 +21,37 @@ const sid = v => (v === null || v === undefined || v === '') ? null : String(v);
 const eqId = (a, b) => a != null && b != null && String(a) === String(b);
 const dbId = v => { const n = Number(v); return isFinite(n) ? n : v; };
 
-let toastTimer = null, pendingUndo = null;
-/* 高频删除走「撤销」而不是二次确认：toast 里带一个 6 秒内可点的撤销按钮 */
+let toastTimer = null, undoStack = [];
+/* 高频删除走「撤销」而不是二次确认：toast 里带 6 秒内可点的撤销按钮。
+   用栈保存多条，连续删除时不会互相覆盖。 */
 function toast(msg, undoFn, ms) {
   const t = $('#toast'); if (!t) return;
-  pendingUndo = (typeof undoFn === 'function') ? undoFn : null;
-  t.innerHTML = esc(msg) + (pendingUndo ? '<button class="undo" data-act="undo">撤销</button>' : '');
+  const now = Date.now();
+  if (typeof undoFn === 'function') {
+    undoStack.push({ fn: undoFn, at: now });
+    while (undoStack.length > 5) undoStack.shift();
+  }
+  undoStack = undoStack.filter(u => now - u.at < 6500);
+  const canUndo = undoStack.length > 0;
+  t.innerHTML = esc(msg) + (canUndo ? '<button class="undo" data-act="undo">撤销</button>' : '');
   t.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(function () { t.classList.remove('on'); pendingUndo = null; },
-    pendingUndo ? 6000 : (ms || 2200));
+  toastTimer = setTimeout(function () { t.classList.remove('on'); },
+    canUndo ? 6000 : (ms || 2200));
+}
+
+/* 表单草稿：弹层关掉不丢输入，24 小时内再打开自动带回 */
+function draftGet(k) {
+  try {
+    const o = JSON.parse(localStorage.getItem('lb.draft.' + k) || 'null');
+    return (o && o.at && Date.now() - o.at < 86400000) ? o.v : null;
+  } catch (e) { return null; }
+}
+function draftSet(k, v) {
+  try { localStorage.setItem('lb.draft.' + k, JSON.stringify({ at: Date.now(), v: v })); } catch (e) {}
+}
+function draftClear(k) {
+  try { localStorage.removeItem('lb.draft.' + k); } catch (e) {}
 }
 
 /* ==================== 站点访问码 ==================== */
@@ -47,14 +68,21 @@ function appBase() {
   const sc = sharecode();
   return location.origin + '/' + (sc ? '?sharecode=' + encodeURIComponent(sc) : '');
 }
+/* 图标走同源 URL 并带上访问码：发布站点不带 sharecode 会 403。
+   这样 192/512 不必以 base64 塞进 HTML，首屏体积少约 130 KB。 */
+function iconUrl(n) {
+  const sc = sharecode();
+  return location.origin + '/icon-' + n + '.png' + (sc ? '?sharecode=' + encodeURIComponent(sc) : '');
+}
 function installManifest() {
-  const ic = window.__LB_ICONS__ || {};
-  // 图标用构建期内联的 data URI：线上 icon-*.png 不带 sharecode 会 403
   const icons = [192, 512].map(function (n) {
-    return ic[String(n)] ? {
-      src: ic[String(n)], sizes: n + 'x' + n, type: 'image/png', purpose: 'any'
-    } : null;
-  }).filter(Boolean);
+    return {
+      src: iconUrl(n), sizes: n + 'x' + n, type: 'image/png',
+      purpose: n === 512 ? 'any maskable' : 'any'
+    };
+  });
+  const ai = document.querySelector('link[rel="apple-touch-icon"]');
+  if (ai) ai.href = iconUrl(180);
   const mf = {
     id: '/', name: '生活记录', short_name: '生活记录',
     description: '打卡、阅读、学习与身体数据。',
@@ -183,6 +211,8 @@ const S = {
   ownerId: null,          // 从云端读回的真实 owner，用于校验写入身份
   loadWarnings: 0,        // 本次加载失败的表数量
   lastWriteError: null,   // 最近一次写入失败，「我的 → 数据健康」可见
+  pending: {},            // 离线打卡队列：'day|habitId' -> 目标状态 true/false
+  limitHit: false,        // 书架/划线是否触达加载上限
   wereadKey: '',          // 微信读书 API Key（存 app_kv，受 RLS 保护）
   wereadSyncAt: null      // 上次书架同步时间
 };
@@ -256,10 +286,36 @@ function applySnapshot(snap, markOffline) {
   SNAP_FIELDS.forEach(function (k) { if (snap.data[k] !== undefined) S[k] = snap.data[k]; });
   S.snapshotAt = snap.at;
   if (markOffline !== false) S.offline = true;
+  applyPending();
   bump();
   return true;
 }
-function renderSkeleton() {
+
+/* ---- 离线打卡队列 -------------------------------------------------------
+   生活记录的使用场景常在户外/地铁：断网时不能让用户「记不了」。
+   这里只把打卡做成可离线（目标状态幂等），其余写操作仍需联网并明确提示。 */
+const PENDING_KEY = 'lb.pendingCheckins.v1';
+function pendingKey(habitId, day) { return day + '|' + String(habitId); }
+function pendingOf(habitId, day) { return S.pending[pendingKey(habitId, day)]; }
+function savePending() {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(S.pending || {})); } catch (e) {}
+}
+function loadPending() {
+  try {
+    const o = JSON.parse(localStorage.getItem(PENDING_KEY) || '{}');
+    S.pending = (o && typeof o === 'object') ? o : {};
+  } catch (e) { S.pending = {}; }
+}
+function applyPending() {
+  Object.keys(S.pending || {}).forEach(function (k) {
+    const i = k.indexOf('|');
+    if (i <= 0) return;
+    const day = k.slice(0, i), hid = k.slice(i + 1);
+    const m = S.checkins[day] = S.checkins[day] || {};
+    if (S.pending[k]) m[hid] = true; else delete m[hid];
+  });
+}
+function renderSkeleton(view) {
   const line = w => '<div class="sk-line sk-anim" style="width:' + w + '"></div>';
   const row = w => '<div class="sk-row"><div class="sk-dot sk-anim"></div>' +
     '<div class="sk-bar sk-anim" style="flex:1;max-width:' + w + '"></div></div>';
@@ -267,7 +323,7 @@ function renderSkeleton() {
     '<div class="sk-card"><div class="sk-bar sk-anim" style="width:62%;height:18px;margin-bottom:14px"></div>' +
     row('78%') + row('64%') + row('82%') + '</div>' +
     '<div class="sk-card">' + row('70%') + row('86%') + '</div></div>';
-  const el = $('#view-today');
+  const el = $('#view-' + (view || S.view || 'today'));
   if (el) { el.innerHTML = html; el.hidden = false; }
 }
 
@@ -286,6 +342,8 @@ function normRow(r) {
 }
 const normRows = rows => (rows || []).map(normRow);
 
+/* 书架/划线设上限：个人库足够用，避免无界增长把首屏拖慢；完整数据仍可全量导出 */
+const LOAD_LIMITS = { books: 1000, notes: 3000 };
 async function loadAll() {
   if (!DB) throw new Error('云服务未就绪');
   const since = dayKey(addDays(new Date(), -400));
@@ -296,8 +354,8 @@ async function loadAll() {
     q(DB.from('checkins').select('habit_id,day').gte('day', since)),
     q(DB.from('health_daily').select('*').gte('day', since).order('day')),
     q(DB.from('activities').select('*').gte('day', since).order('day', { ascending: false }).limit(200)),
-    q(DB.from('books').select('*').order('created_at', { ascending: false })),
-    q(DB.from('notes').select('*').order('created_at')),
+    q(DB.from('books').select('*').order('created_at', { ascending: false }).limit(LOAD_LIMITS.books)),
+    q(DB.from('notes').select('*').order('created_at', { ascending: false }).limit(LOAD_LIMITS.notes)),
     q(DB.from('study_plans').select('*').order('sort_order').order('id')),
     q(DB.from('study_logs').select('*').gte('day', since).order('day', { ascending: false }))
   ]);
@@ -324,6 +382,8 @@ async function loadAll() {
   if (notes) S.notes = normRows(notes);
   if (plans) S.plans = normRows(plans);
   if (logs) S.logs = normRows(logs);
+  S.limitHit = ((books || []).length >= LOAD_LIMITS.books) || ((notes || []).length >= LOAD_LIMITS.notes);
+  applyPending();                 // 云端数据回来后，仍在队列里的离线打卡不能被覆盖掉
   const probe = [].concat(habits || [], health || [], acts || [], books || [],
     notes || [], plans || [], logs || []).find(r => r && r.owner_id);
   if (probe) S.ownerId = String(probe.owner_id);
@@ -369,8 +429,21 @@ function hasCheckins(day) {
 async function toggleCheckin(habitId, day, skipRender) {
   const on = isDone(habitId, day);
   const m = S.checkins[day] = S.checkins[day] || {};
+  const key = pendingKey(habitId, day);
+  const want = !on;
   if (on) delete m[String(habitId)]; else m[String(habitId)] = true;
+
+  /* 离线也能打卡：目标状态入队，联网后幂等回放 */
+  if (S.offline || navigator.onLine === false) {
+    S.pending[key] = want;
+    savePending();
+    if (!skipRender) render(); else renderChrome();
+    toast(want ? '已记录，联网后自动同步' : '已取消，联网后自动同步', null, 2800);
+    return;
+  }
+
   if (!skipRender) render();
+  if (S.pending[key] !== undefined) { delete S.pending[key]; savePending(); }
   try {
     if (on) {
       await q(DB.from('checkins').delete().eq('habit_id', dbId(habitId)).eq('day', day).select());
@@ -378,11 +451,19 @@ async function toggleCheckin(habitId, day, skipRender) {
       await insertRows('checkins', { habit_id: dbId(habitId), day: day });
     }
   } catch (e) {
-    // 回滚
-    if (on) m[String(habitId)] = true; else delete m[String(habitId)];
-    render();
-    noteWriteError('toggle', e);
-    toast('保存失败：' + (e.message || '网络异常'), null, 6000);
+    const net = navigator.onLine === false ||
+      /failed to fetch|network|timeout|load failed|offline/i.test(String(e.message || ''));
+    if (net) {
+      // 网络抖动时不回滚，先落到本机队列，避免用户刚点的记录白丢
+      S.pending[key] = want;
+      savePending();
+      toast('网络中断，已暂存本机，联网后自动同步', null, 6000);
+    } else {
+      if (on) m[String(habitId)] = true; else delete m[String(habitId)];
+      noteWriteError('toggle', e);
+      toast('保存失败：' + (e.message || '网络异常'), null, 6000);
+    }
+    if (!skipRender) render();
   }
 }
 
@@ -512,12 +593,53 @@ function isDupError(e) {
   return s.indexOf('duplicate') >= 0 || s.indexOf('unique constraint') >= 0 || s.indexOf('23505') >= 0;
 }
 async function findRowId(table, col, val, len) {
-  const rows = await q(DB.from(table).select('id,' + col));
-  const hit = (rows || []).find(r => String(r[col]).slice(0, len || 10) === val);
+  const n = len || 10;
+  let rows = null;
+  /* date 列在服务端做范围过滤，避免每次同步都全表拉一遍 */
+  if (n === 10 && /^\d{4}-\d{2}-\d{2}$/.test(String(val))) {
+    try { rows = await q(DB.from(table).select('id,' + col).gte(col, val).lte(col, val)); }
+    catch (e) { rows = null; }
+  }
+  if (!rows) rows = await q(DB.from(table).select('id,' + col));
+  const hit = (rows || []).find(r => String(r[col]).slice(0, n) === val);
   return hit ? dbId(hit.id) : null;
 }
 async function patchById(table, id, payload) {
   await q(DB.from(table).update(payload).eq('id', id).select());
+}
+
+/* 回放离线打卡：目标状态幂等（true=INSERT、false=DELETE），重复写入视为已同步 */
+async function flushPending() {
+  if (!DB || !S.user || S.offline || navigator.onLine === false) {
+    return { ok: 0, left: Object.keys(S.pending || {}).length };
+  }
+  const keys = Object.keys(S.pending || {});
+  if (!keys.length) return { ok: 0, left: 0 };
+  let ok = 0;
+  for (const k of keys) {
+    const i = k.indexOf('|');
+    if (i <= 0) { delete S.pending[k]; continue; }
+    const day = k.slice(0, i), hid = k.slice(i + 1);
+    const want = !!S.pending[k];
+    try {
+      if (want) {
+        try { await insertRows('checkins', { habit_id: dbId(hid), day: day }); }
+        catch (e) { if (!isDupError(e)) throw e; }
+      } else {
+        await q(DB.from('checkins').delete().eq('habit_id', dbId(hid)).eq('day', day).select());
+      }
+      delete S.pending[k]; ok++;
+    } catch (e) {
+      noteWriteError('flushCheckin', e);
+      break;                              // 失败即停，下次联网重试，避免雪崩
+    }
+  }
+  savePending();
+  if (ok) {
+    toast('已同步 ' + ok + ' 项离线打卡');
+    try { await loadAll(); saveSnapshot(); render(); } catch (e) {}
+  }
+  return { ok: ok, left: Object.keys(S.pending || {}).length };
 }
 
 async function upsertHealth(day, patch) {
@@ -550,9 +672,14 @@ async function upsertActivity(row) {
   let cur = (S.activities || []).find(a => String(a.external_id) === ext);
   let id = cur && cur.id !== null && cur.id !== undefined ? dbId(cur.id) : null;
   if (id === null) {
-    const rows = await q(DB.from('activities').select('id,external_id'));
-    const hit = (rows || []).find(r => String(r.external_id) === ext);
-    if (hit) id = dbId(hit.id);
+    try {
+      const rows = await q(DB.from('activities').select('id,external_id').eq('external_id', ext).limit(1));
+      if (rows && rows[0]) id = dbId(rows[0].id);
+    } catch (e) {
+      const rows = await q(DB.from('activities').select('id,external_id'));
+      const hit = (rows || []).find(r => String(r.external_id) === ext);
+      if (hit) id = dbId(hit.id);
+    }
   }
   if (id !== null) {
     await patchById('activities', id, row);
@@ -565,8 +692,14 @@ async function upsertActivity(row) {
     if (saved) S.activities.push(saved);
   } catch (e) {
     if (!isDupError(e)) throw e;
-    const rows = await q(DB.from('activities').select('id,external_id'));
-    const hit = (rows || []).find(r => String(r.external_id) === ext);
+    let hit = null;
+    try {
+      const rows = await q(DB.from('activities').select('id,external_id').eq('external_id', ext).limit(1));
+      hit = rows && rows[0];
+    } catch (e2) {
+      const rows = await q(DB.from('activities').select('id,external_id'));
+      hit = (rows || []).find(r => String(r.external_id) === ext);
+    }
     if (hit) { const rid = dbId(hit.id); await patchById('activities', rid, row); S.activities.push(normRow(Object.assign({ id: rid }, row))); }
     else await q(DB.from('activities').update(row).eq('external_id', ext).select());
   }
@@ -648,6 +781,8 @@ function openTrashSheet() {
 /* ==================== 导出 / 导入备份 ==================== */
 const BACKUP_TABLES = ['habits', 'checkins', 'health_daily', 'activities', 'books',
   'notes', 'study_plans', 'study_logs', 'app_kv'];
+/* 凭据类 KV 不进备份、也不从备份导入：COROS 令牌、微信读书 API Key 等 */
+const SENSITIVE_KV = /(^coros|key|token|secret|password|auth)/i;
 async function fetchBackupRows() {
   if (S.offline) {
     const ck = [];
@@ -664,8 +799,8 @@ async function fetchBackupRows() {
   const out = {};
   for (const t of BACKUP_TABLES) {
     const rows = normRows(await q(DB.from(t).select('*')));
-    // COROS 令牌属于凭据，不写进备份文件
-    out[t] = t === 'app_kv' ? rows.filter(r => !/^coros/i.test(String(r.k))) : rows;
+    // 凭据（COROS 令牌、微信读书 Key 等）不写进备份文件
+    out[t] = t === 'app_kv' ? rows.filter(r => !SENSITIVE_KV.test(String(r.k))) : rows;
   }
   return out;
 }
@@ -682,7 +817,7 @@ async function exportBackup() {
     setTimeout(() => URL.revokeObjectURL(url), 3000);
   } catch (e) {}
   try { localStorage.setItem('lb.last_export', new Date().toISOString()); } catch (e) {}
-  toast('已导出备份（不含 COROS 授权令牌）');
+  toast('已导出备份（已排除授权令牌与 API Key）');
   return { name: name, json: json, tables: tables };
 }
 /* 合并式恢复：已存在的行只补齐软删除状态，缺失的行按外键映射后追加；绝不覆盖现有数据 */
@@ -719,7 +854,7 @@ async function restoreBackup(payload) {
         row[fk[t][0]] = mapped;
       }
       if (t === 'app_kv' &&
-          (/^coros/i.test(String(row.k)) || cur.some(r => String(r.k) === String(row.k)))) { skipped++; continue; }
+          (SENSITIVE_KV.test(String(row.k)) || cur.some(r => String(r.k) === String(row.k)))) { skipped++; continue; }
       try {
         const ins = await insertRows(t, row);
         if (ins[0]) { idMap[t][oldId] = dbId(ins[0].id); cur.push(ins[0]); added++; }
@@ -791,22 +926,34 @@ const TITLES = { today: '今日', calendar: '日历', library: '阅读与学习'
 /* 旧版把阅读、学习拆成两页：离线快照 / 旧链接里的 view 值统一落到合并页 */
 const VIEW_ALIAS = { reading: 'library', study: 'library' };
 
+let chromeCache = { tabbar: '', snav: '' };
 function renderChrome() {
-  $('#tabbar').innerHTML = TABS.map(t =>
+  /* 只在内容真的变化时重建，否则同一视图内的操作会把焦点从标签栏上打掉 */
+  const tb = TABS.map(t =>
     '<button class="tab' + (S.view === t.k ? ' on' : '') + '" data-act="tab" data-id="' + t.k + '">' +
     icon(t.i, 21) + '<span>' + t.n + '</span></button>').join('');
+  if (tb !== chromeCache.tabbar) { $('#tabbar').innerHTML = tb; chromeCache.tabbar = tb; }
   // 桌面侧栏保留「我的」入口；移动端走右上角头像按钮
-  $('#snav').innerHTML = TABS.map(t =>
+  const sn = TABS.map(t =>
     '<button class="' + (S.view === t.k ? 'on' : '') + '" data-act="tab" data-id="' + t.k + '">' +
     icon(t.i, 18) + '<span>' + t.n + '</span></button>').join('') +
     '<div class="side-sep"></div>' +
     '<button class="' + (S.view === 'me' ? 'on' : '') + '" data-act="tab" data-id="me">' +
     icon('person', 18) + '<span>我的</span></button>';
+  if (sn !== chromeCache.snav) { $('#snav').innerHTML = sn; chromeCache.snav = sn; }
   $('#nav-title').textContent = TITLES[S.view] || '';
   const bm = $('#btn-me');
   if (bm) bm.classList.toggle('on', S.view === 'me');
   const ob = $('#offline-bar');
-  if (ob) ob.hidden = !S.offline;
+  if (ob) {
+    ob.hidden = !S.offline;
+    if (S.offline) {
+      const n = Object.keys(S.pending || {}).length;
+      ob.textContent = n
+        ? '离线 · ' + n + ' 项打卡待同步，联网后自动上传'
+        : '离线模式 · 正在显示本机缓存数据，联网后自动同步';
+    }
+  }
 }
 
 function ringHTML(pct, done, total) {
@@ -1003,6 +1150,18 @@ function patchCheckinUI(habitId, day, actName) {
     row.classList.toggle('done', on);
     const chk = row.querySelector('.chk');
     if (chk) { chk.classList.toggle('on', on); chk.innerHTML = on ? icon('check', 15) : ''; }
+    if (row.hasAttribute('aria-checked')) {
+      row.setAttribute('aria-checked', on ? 'true' : 'false');
+      const nm = row.querySelector('.lrow-t');
+      if (nm) row.setAttribute('aria-label', nm.textContent + '，' + (on ? '已完成' : '未完成'));
+    }
+    const pend = pendingOf(habitId, day) !== undefined;
+    row.classList.toggle('pending', pend);
+    const sub = row.querySelector('.lrow-sub');
+    if (sub) {
+      const base = sub.textContent.replace(/ · 待同步$/, '');
+      sub.textContent = base + (pend ? ' · 待同步' : '');
+    }
     row.classList.remove('pop'); void row.offsetWidth; row.classList.add('pop');
   }
   const hero = $('#today-hero');
@@ -1040,12 +1199,12 @@ function openCalJumpSheet() {
 }
 const QUICK_ACTS = [
   { t: '新建打卡项', s: '添加一个每日习惯', i: 'plus', do: 'newhabit', q: '新建打卡项 习惯 habit' },
-  { t: '同步微信读书书架', s: '从官方 API 同步书单', i: 'book', do: 'addbook', q: '同步 书架 微信读书 weread api' },
+  { t: '添加 / 同步书籍', s: '微信读书同步或手动添加', i: 'book', do: 'addbook', q: '添加 同步 书架 微信读书 weread api' },
   { t: '新建学习计划', s: '设定每周目标次数', i: 'pen', do: 'newplan', q: '新建学习计划 目标' },
   { t: '记一次学习', s: '给第一个计划记一次', i: 'check', do: 'logfirst', q: '记一次 学习 记录' },
   { t: '同步身体数据', s: '从 COROS 拉取近 7 天', i: 'refresh', do: 'corosSync', q: '同步 coros 身体数据 睡眠' },
   { t: '回到今天', s: '日历跳回本月今天', i: 'calendar', do: 'caltoday', q: '回到今天 日历 本月' },
-  { t: '打开趋势', s: '查看近 30 天变化', i: 'chart', do: 'tab:trend', q: '趋势 图表 相关性' },
+  { t: '打开趋势', s: '查看近 30 天变化', i: 'chart', do: 'tab:trend', q: '趋势 图表 变化' },
   { t: '切换外观', s: '深色 / 浅色', i: 'moon', do: 'theme', q: '切换外观 深色 浅色 主题' }
 ];
 function openQuickSheet() {
@@ -1130,10 +1289,15 @@ function sparkCardHTML(field) {
 
 function habitRow(h, day, editing, actName) {
   const on = isDone(h.id, day);
-  return '<div class="lrow' + (on ? ' done' : '') + '" data-act="' + actName + '" data-id="' + h.id + '" data-day="' + day + '">' +
+  /* 打卡是核心动作，必须能被键盘与读屏操作；编辑态下父行不可打卡，不再放进 Tab 序列 */
+  const a11y = editing ? '' :
+    ' role="checkbox" tabindex="0" aria-checked="' + (on ? 'true' : 'false') +
+    '" aria-label="' + esc(h.name + '，' + (on ? '已完成' : '未完成')) + '"';
+  const pend = pendingOf(h.id, day) !== undefined;
+  return '<div class="lrow' + (on ? ' done' : '') + (pend ? ' pending' : '') + '" data-act="' + actName + '" data-id="' + h.id + '" data-day="' + day + '"' + a11y + '>' +
     '<div class="licon" style="background:' + esc(h.color) + '">' + icon(h.icon || 'circle', 17) + '</div>' +
     '<div class="lbody"><div class="lrow-t">' + esc(h.name) + '</div>' +
-    '<div class="lrow-sub">' + esc(h.target || '每天') + '</div></div>' +
+    '<div class="lrow-sub">' + esc(h.target || '每天') + (pend ? ' · 待同步' : '') + '</div></div>' +
     (editing ? '<div class="minus" data-act="delhabit" data-id="' + h.id + '">' + icon('minus', 15) + '</div>'
              : '<div class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 15) : '') + '</div>') +
     '</div>';
@@ -1152,9 +1316,22 @@ function renderToday() {
   let html = '<div class="head"><div class="date">' + (d.getMonth() + 1) + '月' + d.getDate() + '日 周' + WK[d.getDay()] + '</div>' +
     '<h2>今日</h2></div>';
 
-  html += reviewHTML();
   html += '<div class="hero" id="today-hero">' + ringHTML(pct, done, total) +
     '<div class="hero-txt"><div class="t">' + w[0] + '</div><div class="s">' + w[1] + '</div></div></div>';
+
+  /* 核心动作优先：打卡紧跟完成度，健康与周回顾下沉为次要信息 */
+  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
+    '<span>今日打卡</span>' +
+    (total ? '<button style="color:var(--blue);font-size:13.5px" data-act="edittoggle">' + (S.editing ? '完成' : '编辑') + '</button>' : '') +
+    '</div>';
+
+  if (!total) {
+    html += '<div class="card"><div class="empty">还没有打卡项。<br>点下方新建一个，或到「我的 → 打卡项管理」添加。</div>' +
+      '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div></div>';
+  } else {
+    html += '<div class="card">' + habitsForDay(day).map(x => habitRow(x, day, S.editing, 'toggle')).join('') +
+      (S.editing ? '' : '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div>') + '</div>';
+  }
 
   const ins = insightOf();
   html += '<div class="insight" data-act="' + (ins.sync ? 'corosSync' : 'tab') + '"' +
@@ -1171,18 +1348,7 @@ function renderToday() {
       '<button class="pill" data-act="corosSync" style="font-size:12px;padding:4px 10px">立即同步</button></div>';
   }
 
-  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
-    '<span>今日打卡</span>' +
-    (total ? '<button style="color:var(--blue);font-size:13.5px" data-act="edittoggle">' + (S.editing ? '完成' : '编辑') + '</button>' : '') +
-    '</div>';
-
-  if (!total) {
-    html += '<div class="card"><div class="empty">还没有打卡项。<br>先在下方新建一个，或到「我的 → 打卡项管理」添加。</div>' +
-      '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div></div>';
-  } else {
-    html += '<div class="card">' + habitsForDay(day).map(x => habitRow(x, day, S.editing, 'toggle')).join('') +
-      (S.editing ? '' : '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div>') + '</div>';
-  }
+  html += reviewHTML();
 
   if (reading.length) {
     html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
@@ -1372,7 +1538,8 @@ function renderLibrary() {
 
   let html = '<div class="head"><div class="date">共 ' + books.length + ' 本 · ' +
     activeNotes().length + ' 条划线 · ' + plans.length + ' 个计划 · 本周 ' + weekLogs +
-    ' 次记录</div><h2>阅读与学习</h2></div>';
+    ' 次记录' + (S.limitHit ? ' · 已加载最近 ' + LOAD_LIMITS.notes + ' 条划线' : '') +
+    '</div><h2>阅读与学习</h2></div>';
 
   html += '<div class="lib-nav"><div class="seg">' +
     [['lib-books', '书架'], ['lib-plans', '计划'], ['lib-logs', '记录']].map(x =>
@@ -1765,7 +1932,7 @@ function renderMe() {
         '</div></div>' : '') +
     '<button class="rowbtn" data-act="exportbackup">' +
     '<div class="icbox" style="background:var(--green)">' + icon('up', 17) + '</div>' +
-    '<div style="flex:1"><div class="rb-t">导出备份</div><div class="rb-s">全量 JSON，不含 COROS 授权令牌</div></div>' +
+    '<div style="flex:1"><div class="rb-t">导出备份</div><div class="rb-s">全量 JSON，不含授权令牌与 API Key</div></div>' +
     '<div class="chev">' + icon('chev', 15) + '</div></button>' +
     '<button class="rowbtn" data-act="importbackup">' +
     '<div class="icbox" style="background:var(--indigo)">' + icon('refresh', 17) + '</div>' +
@@ -1798,28 +1965,51 @@ function renderMe() {
 function render() {
   if (!S.user) return;
   if (VIEW_ALIAS[S.view]) S.view = VIEW_ALIAS[S.view];
+  /* 整页重绘会丢焦点：记下当前操作元素，重绘后按同一 data-act/id/day 还原 */
+  const ae = document.activeElement, keep = ae && ae.getAttribute && ae.getAttribute('data-act')
+    ? { act: ae.getAttribute('data-act'), id: ae.getAttribute('data-id'), day: ae.getAttribute('data-day') } : null;
   renderChrome();
   renderFreshness();
   const map = { today: renderToday, calendar: renderCalendar, library: renderLibrary, trend: renderTrend, me: renderMe };
   VIEWS.forEach(k => { const el = $('#view-' + k); if (el) el.hidden = (S.view !== k); });
   (map[S.view] || renderToday)();
+  if (keep) {
+    const sel = '[data-act="' + keep.act + '"]' +
+      (keep.id ? '[data-id="' + keep.id + '"]' : '') + (keep.day ? '[data-day="' + keep.day + '"]' : '');
+    const again = document.querySelector(sel);
+    if (again && again.focus) { try { again.focus({ preventScroll: true }); } catch (e) {} }
+  }
 }
 
 function go(view) {
   S.view = VIEW_ALIAS[view] || view;
   S.editing = false;
-  render();
+  /* 首次加载时切页给骨架，不再白屏 */
+  if (S.loading) {
+    renderChrome();
+    VIEWS.forEach(k => { const el = $('#view-' + k); if (el) el.hidden = (S.view !== k); });
+    renderSkeleton(S.view);
+  } else render();
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
 }
 
 /* ==================== 弹层 ==================== */
+let sheetReturnFocus = null;
 function openSheet(html) {
+  if (!$('#mask').classList.contains('on')) {
+    const ae = document.activeElement;
+    sheetReturnFocus = (ae && ae !== document.body && ae.focus) ? ae : null;
+  }
   $('#sheet').innerHTML = html;
   $('#mask').classList.add('on');
 }
 function closeSheet() {
   $('#mask').classList.remove('on');
   setTimeout(() => { if (!$('#mask').classList.contains('on')) $('#sheet').innerHTML = ''; }, 300);
+  if (sheetReturnFocus && sheetReturnFocus.focus) {
+    try { sheetReturnFocus.focus({ preventScroll: true }); } catch (e) {}
+  }
+  sheetReturnFocus = null;
 }
 
 /* iOS 风格确认弹层，替代原生 confirm()；返回 Promise<boolean> */
@@ -1844,7 +2034,8 @@ function askConfirm(opts) {
   });
 }
 /* 离线时禁止一切写库 / 授权动作，只保留浏览与导出 */
-const WRITE_ACTS = new Set(['toggle', 'daytoggle', 'savehabit', 'delhabit', 'savemanualbook',
+/* toggle/daytoggle 不在这里：打卡支持离线队列，由 toggleCheckin 自己判断 */
+const WRITE_ACTS = new Set(['savehabit', 'delhabit', 'savemanualbook',
   'delnote', 'delbook', 'togglebookstatus', 'saveplan', 'logstudy', 'delplan', 'doimport',
   'corosConnect', 'corosSync', 'restore', 'importbackup', 'undo',
   'savewereadkey', 'doweresync', 'doshelfimport']);
@@ -1877,6 +2068,13 @@ function openHabitSheet(editId) {
   openSheet(html);
   window.__pickIcon = curIcon;
   window.__pickColor = curColor;
+  if (!h) {
+    const d = draftGet('habit');
+    if (d) {
+      if ($('#ah-name')) $('#ah-name').value = d['ah-name'] || '';
+      if ($('#ah-target')) $('#ah-target').value = d['ah-target'] || '每天';
+    }
+  }
 }
 
 async function submitHabit(editId) {
@@ -1886,6 +2084,7 @@ async function submitHabit(editId) {
   const payload = { name: name, target: target, icon: window.__pickIcon || 'sun', color: window.__pickColor || '#0A84FF' };
   try {
     await saveHabit(payload, editId || null);
+    draftClear('habit');
     closeSheet();
     toast(editId ? '已保存' : '已添加');
   } catch (e) {
@@ -1922,6 +2121,11 @@ function openManualBookSheet() {
     '<input type="text" id="mb-author" placeholder="作者（可留空）">' +
     '</div><div style="margin-top:18px"><button class="btnblock blue" data-act="savemanualbook">添加</button></div></div>';
   openSheet(html);
+  const d = draftGet('book');
+  if (d) {
+    if ($('#mb-title')) $('#mb-title').value = d['mb-title'] || '';
+    if ($('#mb-author')) $('#mb-author').value = d['mb-author'] || '';
+  }
 }
 
 async function submitManualBook() {
@@ -1930,6 +2134,7 @@ async function submitManualBook() {
   const a = ($('#mb-author') && $('#mb-author').value || '').trim();
   try {
     await saveBook({ title: t, author: a || null, status: 'reading', progress: 0, source: 'manual' });
+    draftClear('book');
     closeSheet(); toast('已添加');
   } catch (e) { toast('添加失败：' + (e.message || '网络异常')); }
 }
@@ -1946,6 +2151,12 @@ function openPlanSheet() {
     '<input type="number" id="pl-weeks" placeholder="例如 12" min="1" inputmode="numeric">' +
     '</div><div style="margin-top:18px"><button class="btnblock blue" data-act="saveplan">创建</button></div></div>';
   openSheet(html);
+  const d = draftGet('plan');
+  if (d) {
+    if ($('#pl-title')) $('#pl-title').value = d['pl-title'] || '';
+    if ($('#pl-target')) $('#pl-target').value = d['pl-target'] || '3';
+    if ($('#pl-weeks')) $('#pl-weeks').value = d['pl-weeks'] || '';
+  }
 }
 
 async function submitPlan() {
@@ -1955,6 +2166,7 @@ async function submitPlan() {
   const w = parseInt(($('#pl-weeks') && $('#pl-weeks').value) || '0', 10) || null;
   try {
     await savePlan({ title: t, target_per_week: tg, total_weeks: w, sort_order: activePlans().length });
+    draftClear('plan');
     closeSheet(); toast('已创建');
   } catch (e) { toast('创建失败：' + (e.message || '网络异常')); }
 }
@@ -2023,20 +2235,25 @@ function openWereadSyncSheet() {
   const html = '<div class="grabber"></div>' +
     '<div class="sheet-h"><div class="t">微信读书同步</div><button data-act="closesheet">关闭</button></div>' +
     '<div class="sheet-body">' +
-    '<div class="gfoot" style="margin:0 4px 12px">书架数据来自微信读书官方 Agent API（/shelf/sync）。' +
-    '网关只放行 weread.qq.com 跨域，浏览器直连通常会被拦截；此时在 WorkBuddy 对话里发送「' +
-    WEREAD_HINT + '」，由服务端代拉后写进你的云端书架。</div>' +
+    '<div class="gfoot" style="margin:0 4px 12px">书架来自官方 Agent API（/shelf/sync）。' +
+    '该网关只放行 weread.qq.com 跨域，网页直连几乎都会被拦截，所以推荐下面两种方式。</div>' +
     '<div class="card" style="padding:14px">' +
-    '<div class="lbl" style="margin-top:0">API Key（wrk- 开头，保存在你的云端账户）</div>' +
-    '<input type="text" id="wr-key" placeholder="wrk-…" value="' + esc(S.wereadKey || '') + '">' +
-    '<div style="margin-top:10px"><button class="btnblock blue" data-act="savewereadkey">保存 Key</button></div>' +
-    '<div style="margin-top:8px"><button class="btnblock gray" data-act="doweresync">立即从 API 同步</button></div>' +
-    '<div style="text-align:center;margin-top:10px">' +
-    '<button style="color:var(--blue);font-size:13.5px" data-act="copyweresync">复制同步指令</button></div>' +
-    '</div>' +
-    '<div class="lbl">或粘贴 API 返回的 JSON（/shelf/sync 响应）</div>' +
+    '<div class="lbl" style="margin-top:0">方式 1 · 粘贴 /shelf/sync 的响应</div>' +
     '<textarea id="wr-shelf" placeholder=\'{"books":[{"bookInfo":{"title":"书名","author":"作者"},"progress":35}]}\'></textarea>' +
-    '<div style="margin-top:10px"><button class="btnblock gray" data-act="doshelfimport">解析并同步书架</button></div>' +
+    '<div style="margin-top:10px"><button class="btnblock blue" data-act="doshelfimport">解析并同步书架</button></div>' +
+    '</div>' +
+    '<div class="card" style="padding:14px;margin-top:10px">' +
+    '<div class="lbl" style="margin-top:0">方式 2 · 让 WorkBuddy 服务端代拉</div>' +
+    '<div class="gfoot" style="margin:0 0 10px">复制下面这句，在 WorkBuddy 对话里发送；服务端拉到书架后会写进你的云端账户。</div>' +
+    '<button class="btnblock gray" data-act="copyweresync">复制同步指令</button>' +
+    '</div>' +
+    '<details class="adv"><summary>高级 · 浏览器直连（多数网络会被跨域拦截）</summary>' +
+    '<div class="card" style="padding:14px;margin-top:10px">' +
+    '<div class="lbl" style="margin-top:0">API Key（wrk- 开头，只保存在你的云端账户）</div>' +
+    '<input type="text" id="wr-key" placeholder="wrk-…" value="' + esc(S.wereadKey || '') + '">' +
+    '<div style="margin-top:10px"><button class="btnblock gray" data-act="savewereadkey">保存 Key</button></div>' +
+    '<div style="margin-top:8px"><button class="btnblock gray" data-act="doweresync">立即从 API 同步（实验）</button></div>' +
+    '</div></details>' +
     '<div class="gfoot" style="margin:12px 4px 0">' + esc(wereadStatusText()) +
     ' · 当前书架 ' + activeBooks().length + ' 本</div>' +
     '</div>';
@@ -2176,8 +2393,8 @@ document.addEventListener('click', async function (ev) {
       break;
     }
     case 'undo': {
-      const f = pendingUndo; pendingUndo = null;
-      if (f) { try { await f(); } catch (e) { toast('撤销失败：' + ((e && e.message) || '')); } }
+      const item = undoStack.pop();
+      if (item) { try { await item.fn(); } catch (e) { toast('撤销失败：' + ((e && e.message) || '')); } }
       break;
     }
 
@@ -2387,7 +2604,7 @@ async function enterApp(session) {
   $('#main').hidden = false;
   S.loading = true;
   renderChrome();
-  renderSkeleton();                       // 首屏不再是空白
+  renderSkeleton(S.view);                 // 首屏不再是空白
   const snap = readSnapshot();
   if (snap) { applySnapshot(snap, false); render(); }   // 先用本地快照给出可见内容
   if (navigator.onLine === false) {
@@ -2402,6 +2619,7 @@ async function enterApp(session) {
     saveSnapshot();
     render();
     if (window.Coros) Coros.afterLogin();
+    flushPending();                 // 上次离线攒下的打卡，登录/联网后自动补传
   } catch (e) {
     S.loading = false;
     S.offline = true;
@@ -2436,21 +2654,33 @@ function initNavScroll() {
 /* COROS 把今天的数据写进云端后，页面可能还停在旧的内存快照；
    回到前台时若今天没有身体数据，静默重新拉一次（60 秒节流）。 */
 let lastAutoRefresh = 0;
-async function autoRefreshToday() {
-  if (S.offline || !S.user || S.health[TODAY()]) return;
-  if (Date.now() - lastAutoRefresh < 60000) return;
+/* 回到前台时全量刷新：另一台设备新增的书/计划也能及时出现。
+   正在填表单或弹层打开时跳过，避免打断输入。 */
+async function autoRefreshToday(force) {
+  if (!S.user || S.offline) return;
+  if (!force && Date.now() - lastAutoRefresh < 60000) return;
+  if ($('#mask') && $('#mask').classList.contains('on')) return;
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
   lastAutoRefresh = Date.now();
-  try { await loadAll(); render(); } catch (e) { /* 静默失败，不打断使用 */ }
+  await flushPending();
+  try { await loadAll(); saveSnapshot(); render(); } catch (e) { /* 静默失败，不打断使用 */ }
 }
 function initAutoRefresh() {
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') autoRefreshToday();
   });
   window.addEventListener('focus', autoRefreshToday);
+  window.addEventListener('online', function () {
+    if (!S.user) return;
+    S.offline = false;
+    flushPending();
+  });
 }
 
 async function boot() {
   try { S.lastWriteError = JSON.parse(localStorage.getItem('lb.lastWriteError') || 'null'); } catch (e) {}
+  loadPending();
   applyGlass(glassOn(), true);
   initNavScroll();
   initAutoRefresh();
@@ -2596,13 +2826,37 @@ document.addEventListener('keydown', function (e) {
     return;
   }
   if (k === 'escape' && $('#mask').classList.contains('on')) { closeSheet(); return; }
-  if ((k === 'enter' || k === ' ') && e.target && e.target.classList &&
-      e.target.classList.contains('cal-cell')) {
-    e.preventDefault(); e.target.click();
+  /* 弹层内 Tab 循环，避免焦点跑到背景内容 */
+  if (k === 'tab' && $('#mask') && $('#mask').classList.contains('on')) {
+    const f = Array.from(document.querySelectorAll(
+      '#sheet button:not([disabled]),#sheet input:not([disabled]),#sheet textarea:not([disabled]),' +
+      '#sheet select:not([disabled]),#sheet [tabindex]:not([tabindex="-1"])'))
+      .filter(el => el.offsetParent !== null);
+    if (f.length) {
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+    return;
+  }
+  /* 所有 data-act 卡片/行都可用 Enter / Space 触发（打卡、日历格、洞察卡等） */
+  const t = e.target;
+  if ((k === 'enter' || k === ' ') && t && t.getAttribute && t.getAttribute('data-act') &&
+      t.matches('.cal-cell,.lrow,[role="button"],[role="checkbox"]')) {
+    e.preventDefault(); t.click();
   }
 });
 document.addEventListener('input', function (e) {
-  if (!e.target || e.target.id !== 'quick-q') return;
+  const id = e.target && e.target.id;
+  const DK = { 'ah-name': 'habit', 'ah-target': 'habit', 'mb-title': 'book', 'mb-author': 'book',
+    'pl-title': 'plan', 'pl-target': 'plan', 'pl-weeks': 'plan' };
+  if (DK[id]) {
+    const cur = draftGet(DK[id]) || {};
+    cur[id] = e.target.value;
+    draftSet(DK[id], cur);
+    return;
+  }
+  if (id !== 'quick-q') return;
   const v = String(e.target.value || '').trim().toLowerCase();
   $$('#quick-list .rowbtn').forEach(b => {
     b.hidden = !!v && String(b.dataset.q || '').toLowerCase().indexOf(v) < 0;
@@ -2629,7 +2883,7 @@ window.LifeApp = {
   openSheet: openSheet, closeSheet: closeSheet, enterApp: enterApp,
   openBook: openBook, getKv: kvGet, saveKv: kvSet,
   upsertHealth: upsertHealth, upsertActivity: upsertActivity,
-  appBase: appBase,
+  appBase: appBase, iconUrl: iconUrl,
   rateOfDay: rateOfDay, dayEntries: dayEntries, levelOf: levelOf,
   habitsForDay: habitsForDay, activeHabits: activeHabits, corrPairs: corrPairs,
   activeBooks: activeBooks, activeNotes: activeNotes, activePlans: activePlans,
@@ -2645,6 +2899,7 @@ window.LifeApp = {
   patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML,
   applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight,
   initNavScroll: initNavScroll, autoRefreshToday: autoRefreshToday,
+  flushPending: flushPending, findRowId: findRowId, draftGet: draftGet, draftClear: draftClear,
   loadWereadState: loadWereadState, openWereadSyncSheet: openWereadSyncSheet,
   applyShelf: applyShelf, wereadStatusText: wereadStatusText
 };
