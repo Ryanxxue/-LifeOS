@@ -40,8 +40,9 @@ def main():
         code = e.code
         payload = e.read(300)
     except Exception as e:
-        print('探测请求失败（网络原因，跳过）：%s' % e)
-        return 0
+        # 不能用 0 冒充通过：网络不通时这次安全校验其实没做
+        print('SKIP 匿名写入探测：网络不可达（%s）' % e)
+        return 2
 
     ok = code is not None and code >= 400
     print('%s 匿名写入探测：HTTP %s %s' % ('PASS' if ok else 'FAIL', code,

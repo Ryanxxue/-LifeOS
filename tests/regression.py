@@ -87,6 +87,8 @@ MOCK = r'''
       if (window.__MOCK__ && window.__MOCK__.hideLastInserted && query.t === 'habits' &&
           query.filters.some(f => f[0] === 'id' && String(f[2]) === String(window.__MOCK__.lastInsertId))) rows = [];
       if (query.lim) rows = rows.slice(0, query.lim);
+      // 服务端分页：PostgREST 的 range 两端都含
+      if (query.rng) rows = rows.slice(query.rng[0], query.rng[1] + 1);
       return rows;
     }
     if (query.op === 'insert') {
@@ -128,9 +130,10 @@ MOCK = r'''
     return [];
   }
   class Q {
-    constructor(t) { this.t = t; this.op = 'select'; this.filters = []; this.payload = null; this.lim = 0; }
+    constructor(t) { this.t = t; this.op = 'select'; this.filters = []; this.payload = null; this.lim = 0; this.rng = null; }
     select() { return this; }
     order() { return this; }
+    range(from, to) { this.rng = [from, to]; return this; }
     gte(k, v) { this.filters.push([k, 'gte', v]); return this; }
     lte(k, v) { this.filters.push([k, 'lte', v]); return this; }
     eq(k, v) { this.filters.push([k, 'eq', v]); return this; }
@@ -912,9 +915,10 @@ TEST = r'''
     store.app_kv.push({ id: 9003, owner_id: 'u1', k: 'theme', v: 'dark' });
     const bk = await window.LifeApp.fetchBackupRows();
     ok('安全：备份排除微信读书 Key 与 COROS 令牌，保留普通键',
-       !(bk.app_kv || []).some(r => /key|coros|token/i.test(String(r.k))) &&
-       (bk.app_kv || []).some(r => r.k === 'theme'),
-       (bk.app_kv || []).map(r => r.k).join(','));
+       !(bk.tables.app_kv || []).some(r => /key|coros|token/i.test(String(r.k))) &&
+       (bk.tables.app_kv || []).some(r => r.k === 'theme') &&
+       bk.counts.app_kv === (bk.tables.app_kv || []).length,
+       (bk.tables.app_kv || []).map(r => r.k).join(',') + ' counts=' + bk.counts.app_kv);
 
     /* --- 离线打卡队列 --- */
     goTab('today');
@@ -929,7 +933,7 @@ TEST = r'''
          /待同步/.test(q1('#offline-bar').textContent),
          'pending=' + pendN + ' bar=' + q1('#offline-bar').textContent);
       S.offline = false;
-      await window.LifeApp.flushPending(); await tick();
+      await window.LifeApp.refreshAll(); await tick();
       ok('离线：联网后队列回放并清空',
          Object.keys(S.pending || {}).length === 0 && !q1('#view-today .lrow.pending'),
          'left=' + Object.keys(S.pending || {}).length);
@@ -980,6 +984,69 @@ TEST = r'''
          n0 + ' -> ' + window.LifeApp.activeNotes().length);
     } else ok('打磨：连续删除可逐条撤销', false, 'notes=' + n0);
     window.LifeApp.closeSheet();
+
+    /* --- 账号隔离：快照/离线队列不跨账号 --- */
+    localStorage.setItem('lb.pendingCheckins.v1', JSON.stringify({ '2026-01-01|999': true }));
+    localStorage.setItem('lb.snapshot.v1', JSON.stringify({
+      at: new Date().toISOString(), owner: 'other-user',
+      data: { habits: [{ id: 1, name: '别人的习惯' }], checkins: {}, health: {}, activities: [], books: [], notes: [], plans: [], logs: [] }
+    }));
+    localStorage.setItem('lb.draft.habit', JSON.stringify({ at: Date.now(), v: { 'ah-name': '别人的草稿' } }));
+    const foreignSnap = window.LifeApp.readSnapshot();
+    const mismatch = window.LifeApp.snapshotOfOtherUser();
+    window.LifeApp.clearLocalData();
+    ok('安全：快照按账号隔离，换账号不读他人缓存',
+       foreignSnap === null && mismatch === true &&
+       !localStorage.getItem('lb.snapshot.v1') &&
+       !localStorage.getItem('lb.pendingCheckins.v1') &&
+       !localStorage.getItem('lb.draft.habit') &&
+       Object.keys(S.pending || {}).length === 0,
+       'mismatch=' + mismatch + ' snap=' + (foreignSnap === null));
+
+    /* --- 备份分页：超过单页也要取全 --- */
+    const notesBefore = store.notes.length;
+    for (let i = 0; i < 1200; i++) {
+      store.notes.push({ id: 50000 + i, owner_id: 'u1', book_id: 11, chapter: '', content: '分页测试划线 ' + i,
+        created_at: '2024-01-01T00:00:00Z' });
+    }
+    const bigBk = await window.LifeApp.fetchBackupRows();
+    ok('数据：备份分页取全（1200 行 > 单页 500）',
+       bigBk.counts.notes === notesBefore + 1200 && bigBk.tables.notes.length === notesBefore + 1200 &&
+       bigBk.truncated.length === 0,
+       'notes=' + bigBk.counts.notes + ' truncated=' + bigBk.truncated.join(','));
+    store.notes.splice(notesBefore, 1200);
+
+    /* --- 运动记录触达上限要有明示 --- */
+    const actsBefore = store.activities.length;
+    for (let i = 0; i < 210; i++) {
+      store.activities.push({ id: 60000 + i, owner_id: 'u1', external_id: 'cap-' + i, day: window.__dayAt__(-1),
+        type: '101', name: 'Indoor Run', duration_sec: 1800, distance_m: '5000.0', avg_hr: 150, calories: 300 });
+    }
+    await window.LifeApp.loadAll(); goTab('calendar'); await tick();
+    const capTxt = q1('#view-calendar').textContent;
+    ok('数据：运动触达上限时日历明确提示，不静默少显示',
+       S.limits.activities === true && /仅按最近 200 条运动统计/.test(capTxt),
+       'limit=' + S.limits.activities);
+    store.activities.splice(actsBefore, 210);
+    await window.LifeApp.loadAll(); goTab('today'); await tick();
+
+    /* --- 确认弹层：Esc 取消 + 焦点留在弹层内 --- */
+    let confirmVal = null;
+    const cp = window.LifeApp.askConfirm({ title: '删除', message: '测试' });
+    cp.then(v => { confirmVal = v; });
+    await new Promise(r => setTimeout(r, 80));
+    const cMask = q1('#confirm-mask');
+    const focusInside = !!(document.activeElement && cMask.contains(document.activeElement));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await tick();
+    ok('交互：确认弹层支持 Esc 取消且焦点不落到背景',
+       confirmVal === false && focusInside && !cMask.classList.contains('on'),
+       'val=' + confirmVal + ' focusInside=' + focusInside);
+
+    /* --- 读屏播报 --- */
+    ok('交互：toast 有 role=status 与 aria-live，保存结果可被读屏播报',
+       q1('#toast').getAttribute('role') === 'status' &&
+       q1('#toast').getAttribute('aria-live') === 'polite');
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
   }

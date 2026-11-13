@@ -212,7 +212,8 @@ const S = {
   loadWarnings: 0,        // 本次加载失败的表数量
   lastWriteError: null,   // 最近一次写入失败，「我的 → 数据健康」可见
   pending: {},            // 离线打卡队列：'day|habitId' -> 目标状态 true/false
-  limitHit: false,        // 书架/划线是否触达加载上限
+  limitHit: false,        // 是否有表触达加载上限
+  limits: { books: false, notes: false, activities: false, checkins: false },
   wereadKey: '',          // 微信读书 API Key（存 app_kv，受 RLS 保护）
   wereadSyncAt: null      // 上次书架同步时间
 };
@@ -266,19 +267,43 @@ function icon(name, size) {
 /* ==================== 离线快照 / 骨架屏 ==================== */
 const SNAP_KEY = 'lb.snapshot.v1';
 const SNAP_FIELDS = ['habits', 'checkins', 'health', 'activities', 'books', 'notes', 'plans', 'logs'];
+/* 快照与离线队列都属于「某个账号」：换账号时必须丢弃，否则会看到上一个人的
+   健康/打卡数据，甚至把上一个人的离线打卡按 habit_id 写进新账号。 */
+function userId() {
+  const u = S.user || {};
+  return String(u.id || u.email || '') || '';
+}
+let snapMismatch = false;
+function clearLocalData() {
+  try {
+    localStorage.removeItem(SNAP_KEY);
+    localStorage.removeItem(PENDING_KEY);
+    localStorage.removeItem('lb.lastWriteError');
+    Object.keys(localStorage).forEach(function (k) {
+      if (k.indexOf('lb.draft.') === 0) localStorage.removeItem(k);
+    });
+  } catch (e) {}
+  S.pending = {}; S.snapshotAt = null; S.lastWriteError = null; S.ownerId = null;
+  S.habits = []; S.checkins = {}; S.health = {}; S.activities = [];
+  S.books = []; S.notes = []; S.plans = []; S.logs = [];
+}
 function saveSnapshot() {
   try {
     const data = {};
     SNAP_FIELDS.forEach(function (k) { data[k] = S[k]; });
     const at = new Date().toISOString();
-    localStorage.setItem(SNAP_KEY, JSON.stringify({ at: at, data: data }));
+    localStorage.setItem(SNAP_KEY, JSON.stringify({ at: at, data: data, owner: userId() }));
     S.snapshotAt = at;
   } catch (e) {}
 }
 function readSnapshot() {
   try {
     const o = JSON.parse(localStorage.getItem(SNAP_KEY) || 'null');
-    return (o && o.data) ? o : null;
+    snapMismatch = false;
+    if (!o || !o.data) return null;
+    const me = userId();
+    if (o.owner && me && String(o.owner) !== me) { snapMismatch = true; return null; }
+    return o;
   } catch (e) { return null; }
 }
 function applySnapshot(snap, markOffline) {
@@ -342,28 +367,52 @@ function normRow(r) {
 }
 const normRows = rows => (rows || []).map(normRow);
 
-/* 书架/划线设上限：个人库足够用，避免无界增长把首屏拖慢；完整数据仍可全量导出 */
-const LOAD_LIMITS = { books: 1000, notes: 3000 };
+/* 书架/划线/运动设上限：个人库足够用，避免无界增长把首屏拖慢；完整数据仍可全量导出。
+   checkins 不设上限而是分页取全 —— 它决定历史完成率与热力图，缺行会直接算错。 */
+const LOAD_LIMITS = { books: 1000, notes: 3000, activities: 200, checkins: 6000 };
+const PAGE_SIZE = 500;
+/* 分页取全：服务端可能对单次响应设了行数上限，一次 select 拿不全就会被静默截断。
+   每页用 range 取，取到不足一页即认为到底；累计到 cap 仍未到底则标记 truncated。 */
+async function selectPaged(table, build, cap, cols) {
+  const rows = [];
+  for (let from = 0; from < cap; from += PAGE_SIZE) {
+    let b = DB.from(table).select(cols || '*');
+    if (build) b = build(b);
+    const part = await q(b.order('id').range(from, from + PAGE_SIZE - 1));
+    if (!part || !part.length) return { rows: rows, truncated: false };
+    rows.push.apply(rows, part);
+    if (part.length < PAGE_SIZE) return { rows: rows, truncated: false };
+  }
+  return { rows: rows, truncated: true };
+}
 async function loadAll() {
   if (!DB) throw new Error('云服务未就绪');
   const since = dayKey(addDays(new Date(), -400));
+  const ck = selectPaged('checkins', b => b.gte('day', since), LOAD_LIMITS.checkins, 'habit_id,day')
+    .catch(e => ({ rows: null, truncated: false, error: e }));
   /* 逐表容错：任何一张表查询失败都不该把整个页面打成「离线只读」，
      否则用户看到缓存数据却写不进去，且没有任何明确原因。 */
   const rs = await Promise.allSettled([
     q(DB.from('habits').select('*').order('sort_order').order('id')),
-    q(DB.from('checkins').select('habit_id,day').gte('day', since)),
+    ck,
     q(DB.from('health_daily').select('*').gte('day', since).order('day')),
-    q(DB.from('activities').select('*').gte('day', since).order('day', { ascending: false }).limit(200)),
+    q(DB.from('activities').select('*').gte('day', since).order('day', { ascending: false }).limit(LOAD_LIMITS.activities)),
     q(DB.from('books').select('*').order('created_at', { ascending: false }).limit(LOAD_LIMITS.books)),
     q(DB.from('notes').select('*').order('created_at', { ascending: false }).limit(LOAD_LIMITS.notes)),
     q(DB.from('study_plans').select('*').order('sort_order').order('id')),
     q(DB.from('study_logs').select('*').gte('day', since).order('day', { ascending: false }))
   ]);
-  if (rs.every(r => r.status === 'rejected')) throw (rs[0].reason || new Error('数据加载失败'));
-  S.loadWarnings = rs.filter(r => r.status === 'rejected').length;
-  const at = i => rs[i].status === 'fulfilled' ? (rs[i].value || []) : null;
-  const habits = at(0), checkins = at(1), health = at(2), acts = at(3),
+  const at = i => rs[i].status === 'fulfilled' ? (rs[i].value || null) : null;
+  const ckResEarly = at(1);
+  const failed = rs.filter(r => r.status === 'rejected').length + (ckResEarly && ckResEarly.error ? 1 : 0);
+  if (failed >= rs.length) {
+    const firstRej = rs.find(r => r.status === 'rejected');
+    throw ((ckResEarly && ckResEarly.error) || (firstRej && firstRej.reason) || new Error('数据加载失败'));
+  }
+  S.loadWarnings = failed;
+  const habits = at(0), ckRes = at(1), health = at(2), acts = at(3),
         books = at(4), notes = at(5), plans = at(6), logs = at(7);
+  const checkins = ckRes ? ckRes.rows : null;
   // habits / plans 保留 archived 记录：计算历史分母需要它们，UI 再用 activeXxx() 过滤
   if (habits) S.habits = normRows(habits);
   if (checkins) {
@@ -382,11 +431,19 @@ async function loadAll() {
   if (notes) S.notes = normRows(notes);
   if (plans) S.plans = normRows(plans);
   if (logs) S.logs = normRows(logs);
-  S.limitHit = ((books || []).length >= LOAD_LIMITS.books) || ((notes || []).length >= LOAD_LIMITS.notes);
+  /* 触达上限的表现在明确告知，而不是静默少显示 */
+  S.limits = {
+    books: (books || []).length >= LOAD_LIMITS.books,
+    notes: (notes || []).length >= LOAD_LIMITS.notes,
+    activities: (acts || []).length >= LOAD_LIMITS.activities,
+    checkins: !!(ckRes && ckRes.truncated)
+  };
+  S.limitHit = S.limits.books || S.limits.notes || S.limits.activities || S.limits.checkins;
   applyPending();                 // 云端数据回来后，仍在队列里的离线打卡不能被覆盖掉
   const probe = [].concat(habits || [], health || [], acts || [], books || [],
     notes || [], plans || [], logs || []).find(r => r && r.owner_id);
   if (probe) S.ownerId = String(probe.owner_id);
+  S.offline = false;              // 加载成功即解除离线态，避免闩死
   bump();
 }
 
@@ -635,10 +692,9 @@ async function flushPending() {
     }
   }
   savePending();
-  if (ok) {
-    toast('已同步 ' + ok + ' 项离线打卡');
-    try { await loadAll(); saveSnapshot(); render(); } catch (e) {}
-  }
+  /* 只负责把队列刷进云端，不在这里重载：重载由调用方串行安排，
+     否则和紧随其后的 loadAll 撞在一起会重复拉全量、重复弹 toast。 */
+  if (ok) toast('已同步 ' + ok + ' 项离线打卡');
   return { ok: ok, left: Object.keys(S.pending || {}).length };
 }
 
@@ -783,30 +839,41 @@ const BACKUP_TABLES = ['habits', 'checkins', 'health_daily', 'activities', 'book
   'notes', 'study_plans', 'study_logs', 'app_kv'];
 /* 凭据类 KV 不进备份、也不从备份导入：COROS 令牌、微信读书 API Key 等 */
 const SENSITIVE_KV = /(^coros|key|token|secret|password|auth)/i;
+const BACKUP_CAP = 20000;     // 单表硬上限：超出即标记 truncated，绝不静默少导
 async function fetchBackupRows() {
   if (S.offline) {
     const ck = [];
     Object.keys(S.checkins).forEach(function (d) {
       Object.keys(S.checkins[d]).forEach(function (h) { ck.push({ habit_id: h, day: d }); });
     });
-    return {
+    const tables = {
       habits: S.habits, checkins: ck,
       health_daily: Object.keys(S.health).map(d => Object.assign({ day: d }, S.health[d])),
       activities: S.activities, books: S.books, notes: S.notes,
       study_plans: S.plans, study_logs: S.logs, app_kv: []
     };
+    const counts = {};
+    Object.keys(tables).forEach(k => { counts[k] = (tables[k] || []).length; });
+    return { tables: tables, counts: counts, truncated: [] };
   }
-  const out = {};
+  /* 全量导出必须分页：单次 select 可能被服务端行数上限截断，而用户以为拿到的是全部 */
+  const tables = {}, counts = {}, truncated = [];
   for (const t of BACKUP_TABLES) {
-    const rows = normRows(await q(DB.from(t).select('*')));
+    const res = await selectPaged(t, null, BACKUP_CAP);
+    let rows = normRows(res.rows);
     // 凭据（COROS 令牌、微信读书 Key 等）不写进备份文件
-    out[t] = t === 'app_kv' ? rows.filter(r => !SENSITIVE_KV.test(String(r.k))) : rows;
+    if (t === 'app_kv') rows = rows.filter(r => !SENSITIVE_KV.test(String(r.k)));
+    tables[t] = rows;
+    counts[t] = rows.length;
+    if (res.truncated) truncated.push(t);
   }
-  return out;
+  return { tables: tables, counts: counts, truncated: truncated };
 }
 async function exportBackup() {
-  const tables = await fetchBackupRows();
-  const payload = { app: 'life-dashboard', version: 1, exported_at: new Date().toISOString(), tables: tables };
+  const res = await fetchBackupRows();
+  const total = Object.keys(res.counts).reduce((n, k) => n + res.counts[k], 0);
+  const payload = { app: 'life-dashboard', version: 1, exported_at: new Date().toISOString(),
+    tables: res.tables, counts: res.counts };
   const json = JSON.stringify(payload, null, 2);
   const name = '生活记录备份-' + TODAY() + '.json';
   try {
@@ -817,8 +884,10 @@ async function exportBackup() {
     setTimeout(() => URL.revokeObjectURL(url), 3000);
   } catch (e) {}
   try { localStorage.setItem('lb.last_export', new Date().toISOString()); } catch (e) {}
-  toast('已导出备份（已排除授权令牌与 API Key）');
-  return { name: name, json: json, tables: tables };
+  toast(res.truncated.length
+    ? '已导出 ' + total + ' 行；' + res.truncated.join('、') + ' 超过单表上限，备份不完整'
+    : '已导出 ' + total + ' 行（已排除授权令牌与 API Key）');
+  return { name: name, json: json, tables: res.tables, counts: res.counts, truncated: res.truncated };
 }
 /* 合并式恢复：已存在的行只补齐软删除状态，缺失的行按外键映射后追加；绝不覆盖现有数据 */
 async function restoreBackup(payload) {
@@ -1478,7 +1547,9 @@ function renderCalendar() {
   const monthActs = monthDays.reduce((n, k) => n + activitiesForDay(k).length, 0);
 
   let html = '<div class="head"><div class="date">完成 ' + fullDays + ' 天 · 有记录 ' + anyDays +
-    ' 天 · 本月运动 ' + monthActs + ' 次</div><h2>日历</h2></div>';
+    ' 天 · 本月运动 ' + monthActs + ' 次' +
+    (S.limits && S.limits.activities ? '（仅按最近 ' + LOAD_LIMITS.activities + ' 条运动统计）' : '') +
+    '</div><h2>日历</h2></div>';
 
   html += '<div class="cal" id="cal-box"><div class="cal-top">' +
     '<button class="m" data-act="caljump" aria-label="跳转到年月" ' +
@@ -1536,9 +1607,14 @@ function renderLibrary() {
   const weekFrom = dayKey(weekStart(new Date()));
   const weekLogs = S.logs.filter(l => String(l.day).slice(0, 10) >= weekFrom).length;
 
+  const lim = S.limits || {};
+  const limTxt = [
+    lim.books ? '书架仅显示最近 ' + LOAD_LIMITS.books + ' 本' : '',
+    lim.notes ? '划线仅显示最近 ' + LOAD_LIMITS.notes + ' 条' : ''
+  ].filter(Boolean).join(' · ');
   let html = '<div class="head"><div class="date">共 ' + books.length + ' 本 · ' +
     activeNotes().length + ' 条划线 · ' + plans.length + ' 个计划 · 本周 ' + weekLogs +
-    ' 次记录' + (S.limitHit ? ' · 已加载最近 ' + LOAD_LIMITS.notes + ' 条划线' : '') +
+    ' 次记录' + (limTxt ? ' · ' + limTxt : '') +
     '</div><h2>阅读与学习</h2></div>';
 
   html += '<div class="lib-nav"><div class="seg">' +
@@ -2013,23 +2089,32 @@ function closeSheet() {
 }
 
 /* iOS 风格确认弹层，替代原生 confirm()；返回 Promise<boolean> */
+let confirmReturnFocus = null;
 function askConfirm(opts) {
   return new Promise(function (resolve) {
     const m = $('#confirm-mask');
     if (!m) { resolve(false); return; }
     $('#a-title').textContent = opts.title || '确认操作';
     $('#a-msg').textContent = opts.message || '';
-    const okBtn = $('#a-ok');
+    const okBtn = $('#a-ok'), cancelBtn = $('#a-cancel');
     okBtn.textContent = opts.okText || '删除';
     okBtn.className = 'a-btn ' + (opts.danger === false ? 'blue' : 'danger');
+    const ae = document.activeElement;
+    confirmReturnFocus = (ae && ae !== document.body && ae.focus) ? ae : null;
     m.classList.add('on');
+    /* 键盘与读屏：默认焦点落在「取消」上，误触不会直接删数据 */
+    setTimeout(function () {
+      try { (opts.danger === false ? okBtn : cancelBtn).focus(); } catch (e) {}
+    }, 30);
     function done(v) {
       m.classList.remove('on');
-      okBtn.onclick = null; $('#a-cancel').onclick = null; m.onclick = null;
+      okBtn.onclick = null; cancelBtn.onclick = null; m.onclick = null;
+      const back = confirmReturnFocus; confirmReturnFocus = null;
+      if (back && back.focus) { try { back.focus({ preventScroll: true }); } catch (e) {} }
       resolve(v);
     }
     okBtn.onclick = function () { done(true); };
-    $('#a-cancel').onclick = function () { done(false); };
+    cancelBtn.onclick = function () { done(false); };
     m.onclick = function (e) { if (e.target === m) done(false); };
   });
 }
@@ -2581,9 +2666,11 @@ document.addEventListener('click', async function (ev) {
       break;
     case 'logout': {
       if (!(await askConfirm({
-        title: '退出登录', message: '退出后需要重新登录才能同步数据。', okText: '退出登录', danger: false
+        title: '退出登录', message: '退出后需要重新登录才能同步数据。本机的缓存会一并清除。',
+        okText: '退出登录', danger: false
       }))) break;
       try { await cloud.auth.signOut(); } catch (e) {}
+      clearLocalData();               // 换账号前必须丢掉上一个人的快照与离线队列
       location.reload();
       break;
     }
@@ -2606,6 +2693,7 @@ async function enterApp(session) {
   renderChrome();
   renderSkeleton(S.view);                 // 首屏不再是空白
   const snap = readSnapshot();
+  if (snapMismatch) clearLocalData();   // 快照属于另一个账号：直接丢弃，不进内存
   if (snap) { applySnapshot(snap, false); render(); }   // 先用本地快照给出可见内容
   if (navigator.onLine === false) {
     S.loading = false;
@@ -2619,18 +2707,27 @@ async function enterApp(session) {
     saveSnapshot();
     render();
     if (window.Coros) Coros.afterLogin();
-    flushPending();                 // 上次离线攒下的打卡，登录/联网后自动补传
+    // 先把上次离线攒下的打卡补传，再重载一次让界面与云端一致
+    const f = await flushPending();
+    if (f.ok) { try { await loadAll(); saveSnapshot(); render(); } catch (e) {} }
   } catch (e) {
     S.loading = false;
-    S.offline = true;
+    /* 只有真正的网络问题才进入离线模式；服务端报错/数据异常不能被误标成离线，
+       否则 autoRefresh 会一直跳过，页面永远停在只读。 */
+    const net = navigator.onLine === false ||
+      /failed to fetch|networkerror|network error|timeout|load failed|aborted/i.test(String((e && e.message) || e));
+    S.offline = net;
     console.error('[load] failed', e);
-    if (snap && applySnapshot(snap)) {
+    if (snap && applySnapshot(snap, net)) {
       render();
-      toast('离线模式 · 正在显示本机缓存数据');
+      toast(net ? '离线模式 · 正在显示本机缓存数据'
+                : '数据加载失败：' + ((e && e.message) || '未知原因') + ' · 正在显示本机缓存', null, 6000);
     } else {
       renderChrome();
-      $('#view-today').innerHTML = '<div class="empty" style="padding-top:80px">数据加载失败<br><span style="font-size:12.5px">' +
-        esc(e && e.message || '网络异常') + '</span><br><br><button class="pill" onclick="location.reload()">重试</button></div>';
+      $('#view-today').innerHTML = '<div class="empty" style="padding-top:80px">' +
+        (net ? '离线，且本机还没有缓存' : '数据加载失败') +
+        '<br><span style="font-size:12.5px">' + esc(e && e.message || '网络异常') +
+        '</span><br><br><button class="pill" onclick="location.reload()">重试</button></div>';
     }
   }
 }
@@ -2653,18 +2750,38 @@ function initNavScroll() {
 
 /* COROS 把今天的数据写进云端后，页面可能还停在旧的内存快照；
    回到前台时若今天没有身体数据，静默重新拉一次（60 秒节流）。 */
-let lastAutoRefresh = 0;
+let lastAutoRefresh = 0, lastOfflineRetry = 0, refreshing = false;
+/* 刷新串行化：离线队列回放与全量拉取必须按顺序走，否则会重复拉取、重复提示 */
+async function refreshAll() {
+  if (!S.user || refreshing) return { skipped: true };
+  refreshing = true;
+  try {
+    const f = await flushPending();
+    await loadAll();                 // 成功会把 S.offline 复位
+    saveSnapshot(); render();
+    return f;
+  } catch (e) {
+    return { error: e };
+  } finally {
+    refreshing = false;
+  }
+}
 /* 回到前台时全量刷新：另一台设备新增的书/计划也能及时出现。
-   正在填表单或弹层打开时跳过，避免打断输入。 */
+   正在填表单或弹层打开时跳过，避免打断输入。
+   离线态也允许重试（30 秒节流），否则一次失败会把页面闩死在只读。 */
 async function autoRefreshToday(force) {
-  if (!S.user || S.offline) return;
-  if (!force && Date.now() - lastAutoRefresh < 60000) return;
+  if (!S.user || refreshing) return;
   if ($('#mask') && $('#mask').classList.contains('on')) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
-  lastAutoRefresh = Date.now();
-  await flushPending();
-  try { await loadAll(); saveSnapshot(); render(); } catch (e) { /* 静默失败，不打断使用 */ }
+  if (S.offline) {
+    if (!force && Date.now() - lastOfflineRetry < 30000) return;
+    lastOfflineRetry = Date.now();
+  } else {
+    if (!force && Date.now() - lastAutoRefresh < 60000) return;
+    lastAutoRefresh = Date.now();
+  }
+  await refreshAll();
 }
 function initAutoRefresh() {
   document.addEventListener('visibilitychange', function () {
@@ -2674,7 +2791,7 @@ function initAutoRefresh() {
   window.addEventListener('online', function () {
     if (!S.user) return;
     S.offline = false;
-    flushPending();
+    autoRefreshToday(true);      // 先回放离线队列，再全量刷新（串行，不并发）
   });
 }
 
@@ -2825,6 +2942,24 @@ document.addEventListener('keydown', function (e) {
     setTimeout(function () { const i = $('#quick-q'); if (i) i.focus(); }, 40);
     return;
   }
+  /* 确认弹层优先：Esc 取消、Tab 只在两个按钮间循环，不让焦点落到背后的页面 */
+  const cm = $('#confirm-mask');
+  if (cm && cm.classList.contains('on')) {
+    if (k === 'escape') {
+      e.preventDefault();
+      const c = $('#a-cancel'); if (c) c.click();
+      return;
+    }
+    if (k === 'tab') {
+      const f = Array.from(cm.querySelectorAll('.a-btn')).filter(el => el.offsetParent !== null);
+      if (f.length) {
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+      return;
+    }
+  }
   if (k === 'escape' && $('#mask').classList.contains('on')) { closeSheet(); return; }
   /* 弹层内 Tab 循环，避免焦点跑到背景内容 */
   if (k === 'tab' && $('#mask') && $('#mask').classList.contains('on')) {
@@ -2890,6 +3025,8 @@ window.LifeApp = {
   recentDeleted: recentDeleted, openTrashSheet: openTrashSheet, restoreRow: restoreRow,
   exportBackup: exportBackup, restoreBackup: restoreBackup, fetchBackupRows: fetchBackupRows,
   askConfirm: askConfirm, renderSkeleton: renderSkeleton,
+  clearLocalData: clearLocalData, refreshAll: refreshAll, selectPaged: selectPaged,
+  snapshotOfOtherUser: function () { return snapMismatch; },
   readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,
   sportKind: sportKind, sportIcon: sportIcon, insightOf: insightOf, baselineOf: baselineOf,
   fieldDelta: fieldDelta, sparkSVG: sparkSVG, cmpHTML: cmpHTML, avgMetric: avgMetric,

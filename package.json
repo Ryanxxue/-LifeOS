@@ -1,0 +1,9 @@
+{
+  "name": "life-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "生活记录面板：构建期压缩依赖锁定在此，避免构建依赖联网与版本漂移",
+  "devDependencies": {
+    "terser": "5.51.2"
+  }
+}

@@ -97,18 +97,31 @@ def read(name):
         return f.read()
 
 
+TERSER_BIN = os.path.join('node_modules', '.bin', 'terser')
+TERSER_FALLBACK = ['npx', '--yes', 'terser@5.51.2']
+MINIFY_FAILED = []
+
+
 def minify(code, name):
     """用固定版本的 terser 压缩自有 JS（不含第三方 SDK）。
-    失败时回退原文，保证构建不会因为工具缺失而中断。"""
-    try:
-        r = subprocess.run(
-            ['npx', '--yes', 'terser@5.51.2', '--compress', '--mangle', '--comments', 'false'],
-            input=code, capture_output=True, text=True, timeout=90)
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout
-        print('  警告：%s 压缩失败，使用原文' % name)
-    except Exception as e:
-        print('  警告：无法调用 terser（%s），%s 使用原文' % (e, name))
+
+    优先用本地 node_modules 里的二进制（离线可用、版本锁定）；没有才退回 npx。
+    两者都不可用时**记录失败并让构建失败** —— 之前静默回退原文会让 CI 用一份
+    300 KB 的未压缩产物「通过」，线上体积与缓存版本号都跟着漂移。
+    """
+    cmds = []
+    if os.path.exists(TERSER_BIN):
+        cmds.append([TERSER_BIN])
+    cmds.append(TERSER_FALLBACK)
+    for base in cmds:
+        try:
+            r = subprocess.run(base + ['--compress', '--mangle', '--comments', 'false'],
+                               input=code, capture_output=True, text=True, timeout=120)
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout
+        except Exception:
+            continue
+    MINIFY_FAILED.append(name)
     return code
 
 
@@ -118,6 +131,7 @@ def data_uri(name):
 
 
 def build_all():
+    del MINIFY_FAILED[:]
     html = read('index.src.html')
     for name in JS_FILES:
         tag = '<script src="%s"></script>' % name
@@ -170,6 +184,11 @@ def build_all():
 
 def build():
     files, digest = build_all()
+    if MINIFY_FAILED:
+        print('压缩失败：%s' % '、'.join(MINIFY_FAILED))
+        print('请先安装本地依赖（npm install）或用 npx 联网获取 terser@5.51.2。')
+        print('不会写入未压缩产物 —— 体积与 SW 版本号都会失真。')
+        return 1
     for name, content in files.items():
         with open(name, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -189,6 +208,9 @@ def check():
         if read(name) != expect:
             problems.append('%s 与源码不一致 —— 改过源码后忘记跑 python3 build.py' % name)
     html = files['index.html']
+    if MINIFY_FAILED:
+        problems.append('terser 不可用，%s 未压缩，拒绝发布（先 npm install 或联网）'
+                        % '、'.join(MINIFY_FAILED))
     if re.search(r'<script\s+[^>]*src=', html):
         problems.append('index.html 仍有外链 <script src>（线上不带 sharecode 会 403）')
     if 'icon-192.png"' in html or 'icon-512.png"' in html:
