@@ -1716,10 +1716,8 @@ function renderLibrary() {
   const f = S.filter;
   const books = activeBooks();
   const list = books.filter(b => f === 'all' ? true : b.status === f);
-  /* 「继续阅读」只放真正开读的书（有进度），否则同步进来的整架书会在
-     横滑条与下方网格里各出现一遍，看起来像重复导入。 */
-  const reading = books.filter(b => b.status === 'reading' && Number(b.progress) > 0)
-    .sort((a, b) => Number(b.progress) - Number(a.progress)).slice(0, 6);
+  /* 书架只保留一种展示（三列网格）：进度、划线数都挂在格子内，
+     不再另开一条横滑「继续阅读」，避免同一本书在两种尺寸下各出现一次。 */
   const plans = activePlans();
   const weekFrom = dayKey(weekStart(new Date()));
   const weekLogs = S.logs.filter(l => String(l.day).slice(0, 10) >= weekFrom).length;
@@ -1748,20 +1746,20 @@ function renderLibrary() {
   left += '<div class="seg">' +
     [['all', '全部'], ['reading', '在读'], ['done', '读完']].map(x =>
       '<button class="' + (f === x[0] ? 'on' : '') + '" data-act="filter" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div>';
-  if (reading.length && f !== 'done') {
-    left += '<div class="gtitle">继续阅读</div><div class="card"><div class="rail">' + reading.map(b => {
-      const n = bookNotes(b.id).length;
-      return '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
-        '<div class="bk-t">' + esc(b.title) + '</div><div class="bk-a">' + (n ? n + ' 条划线' : esc(b.author || '')) + '</div></div>';
-    }).join('') + '</div></div>';
-  }
   if (!list.length) {
     left += '<div class="card"><div class="empty">书架还是空的。<br>可以从微信读书粘贴导入，也可以手动添加；<br>点右上「+」→「添加书籍」即可开始。</div>' +
       '<div class="addrow" data-act="addbook">' + icon('plus', 17) + '添加书籍</div></div>';
   } else {
-    left += '<div class="shelf">' + list.map(b =>
-      '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
-      '<div class="bk-t">' + esc(b.title) + '</div><div class="bk-a">' + esc(b.author || '') + '</div></div>').join('') + '</div>';
+    left += '<div class="shelf">' + list.map(b => {
+      const pr = Math.max(0, Math.min(100, Number(b.progress) || 0));
+      const done = b.status === 'done';
+      const n = bookNotes(b.id).length;
+      return '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
+        '<div class="bk-t">' + esc(b.title) + '</div>' +
+        '<div class="bk-a">' + (done ? '已读完' : esc(b.author || '')) + '</div>' +
+        (!done && pr > 0 ? '<div class="bk-prog" aria-hidden="true"><i style="width:' + pr + '%"></i></div>' : '') +
+        (n ? '<div class="bk-a">' + n + ' 条划线</div>' : '') + '</div>';
+    }).join('') + '</div>';
   }
 
   /* ---- 右列：学习计划 ---- */

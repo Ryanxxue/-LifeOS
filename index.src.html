@@ -161,8 +161,14 @@ svg{display:block}
 :root[data-theme="light"] .seg button.on{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 
 /* 书架 */
-.shelf{display:grid;grid-template-columns:repeat(3,1fr);gap:16px 14px}
-@media(min-width:560px){.shelf{grid-template-columns:repeat(4,1fr)}}
+/* minmax(0,1fr)：1fr 的最小值是 auto（= 内容最小宽度），长书名会把某列撑宽、
+   各列封面大小不一；用 minmax(0,…) 强制等宽 */
+.shelf{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px 14px}
+/* .bk 在横滑区是固定 86px，放进网格后必须撑满列宽，否则封面缩在一侧、右边留白 */
+.shelf .bk{width:auto}
+.bk-prog{height:3px;border-radius:2px;background:var(--fill);margin-top:5px;overflow:hidden}
+.bk-prog i{display:block;height:100%;border-radius:2px;background:var(--blue)}
+@media(min-width:560px){.shelf{grid-template-columns:repeat(4,minmax(0,1fr))}}
 
 /* 日历 */
 .cal{background:var(--card);border-radius:var(--r);padding:12px 10px}
