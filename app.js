@@ -1161,32 +1161,6 @@ function fieldDelta(field) {
   if (!b || v === null) return null;
   return { cur: v, base: b.avg, delta: v - b.avg, rel: b.avg ? (v - b.avg) / b.avg : 0, n: b.n };
 }
-function insightOf() {
-  const h = S.health[TODAY()];
-  if (!h) {
-    const last = Object.keys(S.health).sort().pop();
-    const lastTxt = last ? '最近有数据的是 ' + Number(last.slice(5, 7)) + '月' + Number(last.slice(8, 10)) + '日。' : '';
-    const now = new Date();
-    return {
-      text: '今天（' + (now.getMonth() + 1) + '月' + now.getDate() +
-        '日）的身体数据还没同步到本机。' + lastTxt + '点这里从 COROS 拉取。',
-      sub: '同步后自动刷新，不用重开页面', sync: true
-    };
-  }
-  let best = null;
-  BASE_FIELDS.forEach(f => {
-    const d = fieldDelta(f.f);
-    if (d && Math.abs(d.rel) >= 0.08 && (!best || Math.abs(d.rel) > Math.abs(best.d.rel))) best = { f: f, d: d };
-  });
-  if (!best) return { text: '各项身体数据接近近 7 日常态，按今天的计划来就好。', sub: '基于近 7 日个人基线 · 仅作参考，不构成医学建议', sync: false };
-  const f = best.f, d = best.d, up = d.delta > 0;
-  const val = f.d ? (Math.round(d.cur * 10) / 10).toFixed(1) : String(Math.round(d.cur));
-  const diff = f.d ? (Math.round(Math.abs(d.delta) * 10) / 10).toFixed(1) : String(Math.round(Math.abs(d.delta)));
-  return {
-    text: f.label + ' ' + val + f.unit + '，比近 7 天' + (up ? '高 ' : '低 ') + diff + (f.unit || '') + '。' + (up ? f.high : f.low),
-    sub: '基于近 7 日个人基线（' + d.n + ' 天）· 仅作参考，不构成医学建议', sync: false
-  };
-}
 function sparkSVG(vals, color) {
   const nn = vals.filter(v => v !== null && v !== undefined && isFinite(v));
   if (nn.length < 2) return '<span class="gfoot">近 14 天数据不足，暂时画不出走势</span>';
@@ -1449,11 +1423,12 @@ function heroWords(pct) {
 
 function healthCells(day) {
   const h = S.health[day] || {};
+  /* 只留三格：训练负荷对日常决策帮助最小（且 COROS 常给空值），
+     移除后网格改为 3 列；它在趋势页的相关性与详情弹层里仍可查看。 */
   const cells = [
     { k: '睡眠', f: 'sleep_total', v: fmt1(num(h.sleep_total)), u: 'h' },
     { k: 'HRV', f: 'hrv', v: h.hrv == null ? '—' : Math.round(h.hrv), u: 'ms' },
-    { k: '静息心率', f: 'resting_hr', v: h.resting_hr == null ? '—' : Math.round(h.resting_hr), u: 'bpm' },
-    { k: '训练负荷', f: 'training_load', v: h.training_load == null ? '—' : Math.round(h.training_load), u: '' }
+    { k: '静息心率', f: 'resting_hr', v: h.resting_hr == null ? '—' : Math.round(h.resting_hr), u: 'bpm' }
   ];
   return '<div class="health">' + cells.map(c => {
     const d = day === TODAY() ? fieldDelta(c.f) : null;
@@ -1528,16 +1503,8 @@ function renderToday() {
       (S.editing ? '' : '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div>') + '</div>';
   }
 
-  /* 「今天的身体数据还没同步」这种整块提示不再占位：没数据时下面的身体四格
-     和「立即同步」已经说清楚了，洞察卡只在真有今日数据时出现。 */
-  const ins = insightOf();
-  if (!ins.sync) {
-    html += '<div class="insight" data-act="tab" data-id="trend" role="button" tabindex="0" ' +
-      'aria-label="查看身体数据详情">' +
-      '<div class="ii">' + icon('med', 16) + '</div>' +
-      '<div class="it">' + esc(ins.text) + '<div class="is">' + esc(ins.sub) + '</div></div>' +
-      '<div class="go">' + icon('chev', 15) + '</div></div>';
-  }
+  /* 洞察卡已移除：一句话结论容易被当成「健康建议」误读，且它会随基线漂移
+     反复挑一条指标放大，信息价值低于误解成本。状态改由下面的三格 + 基线偏移承担。 */
 
   html += healthCells(day);
   if (!h) {
@@ -3180,7 +3147,7 @@ window.LifeApp = {
   syncCorosDaily: syncCorosDaily, corosAutoDoneToday: corosAutoDoneToday,
   snapshotOfOtherUser: function () { return snapMismatch; },
   readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,
-  sportKind: sportKind, sportIcon: sportIcon, insightOf: insightOf, baselineOf: baselineOf,
+  sportKind: sportKind, sportIcon: sportIcon, baselineOf: baselineOf,
   fieldDelta: fieldDelta, sparkSVG: sparkSVG, cmpHTML: cmpHTML, avgMetric: avgMetric,
   weekReview: weekReview, factorInsights: factorInsights, dataHealth: dataHealth,
   renderFreshness: renderFreshness, swipeMonth: swipeMonth, openQuickSheet: openQuickSheet,

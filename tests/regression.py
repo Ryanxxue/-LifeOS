@@ -648,18 +648,19 @@ TEST = r'''
        !!q1('#view-today [data-act="corosSync"]'));
     S.health[dayAt(0)] = { sleep_total: 7.2, hrv: 58, resting_hr: 54, training_load: 40 };
     window.LifeApp.render(); await tick();
-    ok('P0-2：有今日身体数据时四格显示个人基线偏移',
+    ok('P0-2：有今日身体数据时三格显示个人基线偏移',
        document.querySelectorAll('#view-today .hdelta').length >= 1 &&
        !!q1('#view-today [data-act="healthdetail"]') &&
-       /近 7 日|近 7 天|常态/.test(q1('#view-today .insight').textContent));
+       document.querySelectorAll('#view-today .hcell').length === 3);
     q1('#view-today [data-act="healthdetail"]').click(); await tick();
     ok('P0-2：点按展开近 14 天 sparkline 与基线值',
        !!q1('#health-spark svg.sparkline') && /个人基线/.test(q1('#health-spark').textContent));
     ok('P1-8：今日页有本周回顾折叠卡且含四项环比',
        !!q1('#view-today .review') && /上周/.test(q1('#view-today .review').textContent) &&
        document.querySelectorAll('#view-today .review .rv-row').length === 4);
-    ok('P1-8b：真有今日身体数据时洞察卡恢复显示且可下钻趋势',
-       !!q1('#view-today .insight') && !!q1('#view-today .insight').getAttribute('data-act'));
+    ok('P1-8b：今日页不再有洞察卡，也不再有训练负荷（含四格里的那一格）',
+       !q1('#view-today .insight') && !q1('#view-today #week-review .insight') &&
+       !/训练负荷/.test(q1('#view-today').textContent));
     const beforeHero = q1('#today-hero .val b') ? q1('#today-hero .val b').textContent : '';
     const habitRow = q1('#view-today .lrow[data-act="toggle"]');
     if (habitRow) habitRow.click(); await tick();
