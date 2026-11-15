@@ -1453,8 +1453,7 @@ function sparkCardHTML(field) {
   const base = d ? (f.d ? (Math.round(d.base * 10) / 10).toFixed(1) : String(Math.round(d.base))) + f.unit : '基线数据不足';
   return '<div class="sparkcard" id="health-spark"><div class="sh"><span>' + f.label + ' · 近 14 天</span>' +
     '<span>个人基线 ' + base + '</span></div>' +
-    sparkSVG(vals, field === 'hrv' ? 'var(--green)' : 'var(--blue)') +
-    '<div class="gfoot" style="margin-top:6px">断口表示当天没有数据；基线取近 7 天（不含今天）的平均值。</div></div>';
+    sparkSVG(vals, field === 'hrv' ? 'var(--green)' : 'var(--blue)') + '</div>';
 }
 
 function habitRow(h, day, editing, actName) {
@@ -1675,7 +1674,6 @@ function renderCalendar() {
       '<div class="lrow-sub">' + esc(h.target || '每天') + '</div></div>' +
       '<div class="chk' + (isDone(h.id, S.selDay) ? ' on' : '') + '">' + (isDone(h.id, S.selDay) ? icon('check', 15) : '') + '</div>' +
       '</div>').join('') + '</div>';
-    html += '<div class="gfoot">点任意一项可补录或取消该天的记录。</div>';
   }
 
   const acts = activitiesForDay(S.selDay);
@@ -1686,7 +1684,6 @@ function renderCalendar() {
     ? '<div class="card">' + acts.map(activityRow).join('') + '</div>'
     : '<div class="card"><div class="empty" style="padding:22px 16px">这一天没有运动记录<br>' +
       '<span style="font-size:12px">连接 COROS 后，运动会自动落到对应日期</span></div></div>';
-  html += '<div class="gfoot">日期下方的图标表示当天运动类型，多条时右侧数字是条数；点月份标题可跳转年月，左右滑动可翻月。</div>';
 
   $('#view-calendar').innerHTML = html;
 }
@@ -1996,10 +1993,7 @@ function renderTrend() {
     : (mode === 'sleep' ? '<span><i style="background:var(--orange)"></i>睡眠(h)</span>'
                         : '<span><i style="background:var(--blue)"></i>完成率</span>');
   html += '<div class="chartcard"><div class="chart-head"><div class="t">' + title1 + '</div>' +
-    '<div class="lg">' + lg1 + '</div></div>' + chartSVG(days, lines1, { hit: true }) + '</div>' +
-    '<div class="gfoot">' +
-    (mode === 'both' ? '完成率按当日有效打卡项计算（0–100%），睡眠按 0–10 小时，各自缩放；' : '单一指标，纵轴为该指标本身；') +
-    '断口表示当天没有数据。末端数字为当前值，点按图表任意日期可跳到当天记录。</div>';
+    '<div class="lg">' + lg1 + '</div></div>' + chartSVG(days, lines1, { hit: true }) + '</div>';
 
   const rhrs = days.map(rhrGet).filter(v => v !== null);
   const pool = hrvs.map(Number).concat(rhrs.map(Number));
@@ -2013,7 +2007,7 @@ function renderTrend() {
     chartSVG(days, [
       { get: hrvGet, min: lo, max: hi, color: 'var(--green)', fmt: v => String(Math.round(v)) },
       { get: rhrGet, min: lo, max: hi, color: 'var(--pink)', fmt: v => String(Math.round(v)) }
-    ], { hit: true }) + '</div><div class="gfoot" style="margin-left:6px">两条线共用同一纵轴范围（' + lo + '–' + hi + '），断口表示当天没有数据。</div>';
+    ], { hit: true }) + '</div>';
 
   $('#view-trend').innerHTML = html;
 }
@@ -2130,8 +2124,8 @@ function renderMe() {
     '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div></div>';
 
   html += '<div style="margin-top:24px"><button class="btnblock gray danger" data-act="logout">退出登录</button></div>';
-  html += '<div class="gfoot" style="text-align:center;margin-top:12px">数据存储在你的云端账户，多设备同一账号即可同步。<br>' +
-    '构建 ' + esc(window.__LB_BUILD__ || 'dev') + ' · 离线时显示本机最后一次同步的数据</div>';
+  html += '<div class="gfoot" style="text-align:center;margin-top:12px">构建 ' +
+    esc(window.__LB_BUILD__ || 'dev') + '</div>';
 
   $('#view-me').innerHTML = html;
 }

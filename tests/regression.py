@@ -322,7 +322,8 @@ TEST = r'''
        document.querySelectorAll('#view-trend .mcell').length === 3 &&
        document.querySelectorAll('#view-trend .chartcard').length === 2 &&
        !/相关系数/.test(trendTxt));
-    ok('P1-4 趋势页口径说明仍完整', /断口表示当天没有数据/.test(trendTxt));
+    ok('P1-4 趋势页已去掉口径说明小字', !/断口表示当天没有数据/.test(trendTxt) &&
+       !/共用同一纵轴/.test(trendTxt) && !/点按图表任意日期/.test(trendTxt));
 
     /* --- P1-5：连点「记一次」 --- */
     goTab('library');
