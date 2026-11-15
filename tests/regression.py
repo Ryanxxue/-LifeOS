@@ -835,9 +835,10 @@ TEST = r'''
 
     const runSvg = window.LifeApp.sportIcon({ name: 'Indoor Run' }, 14);
     const bikeSvg = window.LifeApp.sportIcon({ name: 'Cycling' }, 14);
-    ok('运动图标：按类型映射为统一线性一套',
-       /M11 5a2 2 0/.test(runSvg) && /M2 18a3 3 0/.test(bikeSvg) &&
-       !/15\.2/.test(runSvg) && runSvg !== bikeSvg);
+    ok('运动图标：按类型映射为统一简洁一套（单路径 Material Symbols）',
+       /viewBox="0 -960 960 960"/.test(runSvg) && /<path d="M/.test(runSvg) &&
+       runSvg !== bikeSvg && (runSvg.match(/<path/g) || []).length === 1 &&
+       !/stroke=/.test(runSvg) && /fill="currentColor"/.test(runSvg));
 
     ok('微信读书：官方 API 解析器与同步入口就绪',
        typeof window.Weread.parseShelf === 'function' &&
@@ -1029,6 +1030,34 @@ TEST = r'''
        'limit=' + S.limits.activities);
     store.activities.splice(actsBefore, 210);
     await window.LifeApp.loadAll(); goTab('today'); await tick();
+
+    /* --- 每天首次打开自动同步 COROS --- */
+    const realCoros = window.Coros;
+    let syncCalls = 0;
+    window.Coros = {
+      status: () => ({ connected: true }),
+      sync: async () => { syncCalls++; return { days: 2, activities: 1, warnings: [] }; }
+    };
+    localStorage.removeItem('lb.corosAutoDay');
+    const sync1 = await window.LifeApp.syncCorosDaily({ silent: true });
+    const marked = window.LifeApp.corosAutoDoneToday();
+    const sync2 = await window.LifeApp.syncCorosDaily({ silent: true });
+    ok('COROS：每天首次打开自动同步一次，成功后写标记且当天不重复',
+       sync1.ok === true && syncCalls === 1 && marked === true && sync2.skipped === true,
+       'ok=' + sync1.ok + ' calls=' + syncCalls + ' marked=' + marked + ' again=' + sync2.skipped);
+
+    let failCalls = 0;
+    window.Coros = {
+      status: () => ({ connected: true }),
+      sync: async () => { failCalls++; throw new Error('boom'); }
+    };
+    localStorage.removeItem('lb.corosAutoDay');
+    const syncFail = await window.LifeApp.syncCorosDaily({ silent: true });
+    ok('COROS：自动同步失败不写标记，下次打开会重试',
+       syncFail.ok === false && failCalls === 1 && !window.LifeApp.corosAutoDoneToday(),
+       'ok=' + syncFail.ok + ' marked=' + window.LifeApp.corosAutoDoneToday());
+    window.Coros = realCoros;
+    localStorage.removeItem('lb.corosAutoDay');
 
     /* --- 确认弹层：Esc 取消 + 焦点留在弹层内 --- */
     let confirmVal = null;

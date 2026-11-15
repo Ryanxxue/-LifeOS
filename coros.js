@@ -774,15 +774,8 @@ function warnings() { return (cache && cache.last_warnings) || []; }
 
 async function afterLogin() {
   await loadAuth();
-  const S = window.LifeApp.S;
-  if (!cache || !cache.access_token) return;
-  const t = ymd(new Date());
-  if (S.health[t]) return;                       // 今天已有数据
-  if (cache.last_sync && (Date.now() - new Date(cache.last_sync).getTime()) < 6 * 3600 * 1000) return;
-  try {
-    const res = await sync(2);
-    if (res.days > 0) { await window.LifeApp.loadAll(); window.LifeApp.render(); }
-  } catch (e) { console.warn('[coros] auto sync skipped:', e.message); }
+  /* 自动同步已由 app.js 的 syncCorosDaily() 统一负责（按「每天首次」调度），
+     这里只把令牌读进内存，避免两条路径各跑一次。 */
 }
 
 async function diagnostics() {

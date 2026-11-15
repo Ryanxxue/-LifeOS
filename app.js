@@ -279,6 +279,7 @@ function clearLocalData() {
     localStorage.removeItem(SNAP_KEY);
     localStorage.removeItem(PENDING_KEY);
     localStorage.removeItem('lb.lastWriteError');
+    localStorage.removeItem(COROS_AUTO_KEY);
     Object.keys(localStorage).forEach(function (k) {
       if (k.indexOf('lb.draft.') === 0) localStorage.removeItem(k);
     });
@@ -1047,7 +1048,24 @@ function sportKind(a) {
   for (const it of SPORT_KIND) if (it[0].test(raw)) return it[1];
   return 'run';
 }
-function sportIcon(a, size) { return icon(sportKind(a), size || 14); }
+/* 运动图标：Material Symbols Rounded（Apache-2.0）单路径线性图标，
+   比原来多段描边的一套更简洁，缩到 13px 也不糊。viewBox 是 0 -960 960 960。 */
+const SPORT_PATHS = {
+run: 'M520-80v-200l-84-80-31 138q-4 16-17.5 24.5T358-192l-198-40q-17-3-26-17t-6-31q3-17 17-26.5t31-5.5l152 32 64-324-72 28v96q0 17-11.5 28.5T280-440q-17 0-28.5-11.5T240-480v-122q0-12 6.5-21.5T264-638l134-58q35-15 51.5-19.5T480-720q21 0 39 11t29 29l40 64q21 34 54.5 59t77.5 33q17 3 28.5 15t11.5 29q0 17-11.5 28t-27.5 9q-54-8-101-33.5T540-540l-24 120 72 68q6 6 9 13.5t3 15.5v243q0 17-11.5 28.5T560-40q-17 0-28.5-11.5T520-80Zm-36.5-683.5Q460-787 460-820t23.5-56.5Q507-900 540-900t56.5 23.5Q620-853 620-820t-23.5 56.5Q573-740 540-740t-56.5-23.5Z',
+  bike: 'M200-80q-83 0-141.5-58.5T0-280q0-83 58.5-141.5T200-480q83 0 141.5 58.5T400-280q0 83-58.5 141.5T200-80Zm85-115q35-35 35-85t-35-85q-35-35-85-35t-85 35q-35 35-35 85t35 85q35 35 85 35t85-35Zm243-441-96 96 66 69q11 11 16.5 25t5.5 30v176q0 17-11.5 28.5T480-200q-17 0-28.5-11.5T440-240v-160L312-512q-12-11-18-25.5t-6-30.5q0-16 6.5-30.5T312-624l112-112q12-12 27.5-18t32.5-6q17 0 32.5 6t27.5 18l76 76q23 23 50.5 37.5T729-603q17 3 26.5 16t6.5 30q-3 17-16 26.5t-30 6.5q-45-8-84.5-28T560-604l-32-32Zm35.5-127.5Q540-787 540-820t23.5-56.5Q587-900 620-900t56.5 23.5Q700-853 700-820t-23.5 56.5Q653-740 620-740t-56.5-23.5ZM760-80q-83 0-141.5-58.5T560-280q0-83 58.5-141.5T760-480q83 0 141.5 58.5T960-280q0 83-58.5 141.5T760-80Zm85-115q35-35 35-85t-35-85q-35-35-85-35t-85 35q-35 35-35 85t35 85q35 35 85 35t85-35Z',
+  swim: 'M480-160q-36 0-57 20t-77 20q-56 0-77-20t-57-20q-29 0-44 13.5T121-125q-16 4-28.5-7T80-160q0-17 12-29.5t27-20.5q17-9 36-19.5t57-10.5q56 0 77 20t57 20q36 0 57-20t77-20q56 0 77 20t57 20q36 0 57-20t77-20q38 0 57 10.5t36 19.5q15 8 27 20.5t12 29.5q0 17-12.5 28t-28.5 7q-32-8-47-21.5T748-160q-36 0-57 20t-77 20q-56 0-77-20t-57-20Zm0-180q-38 0-56.5 20T346-300q-59 0-78.5-20T212-340q-29 0-44 13.5T121-305q-16 4-28.5-7T80-340q0-17 12-29.5t27-20.5q17-9 36-19.5t57-10.5q56 0 77.5 20t56.5 20q36 0 57-20t77-20q56 0 77 20t57 20q36 0 57-20t77-20q38 0 57 10.5t36 19.5q15 8 27 20.5t12 29.5q0 17-12.5 28t-28.5 7q-32-8-47-21.5T748-340q-36 0-55.5 20T614-300q-57 0-77.5-20T480-340ZM276-504l133-133-40-40q-25-25-51.5-39.5T257-736q-20-4-34.5-19T208-790q0-21 15-35.5t35-12.5q54 5 93 22.5t77 55.5l256 256q-17 11-33 17.5t-37 6.5q-36 0-57-20t-77-20q-56 0-77 20t-57 20q-21 0-37-6.5T276-504Zm463-306.5q29 29.5 29 70.5 0 42-29 71t-71 29q-42 0-71-29t-29-71q0-41 29-70.5t71-29.5q42 0 71 29.5Z',
+  hike: 'M436-360 371-72q-3 14-14.5 23T330-40q-20 0-32-15t-8-34l113-573q6-29 27-43.5t44-14.5q23 0 42.5 10t31.5 30l40 64q18 29 46.5 52.5T700-529v-41q0-13 8.5-21.5T730-600q13 0 21.5 8.5T760-570v500q0 13-8.5 21.5T730-40q-13 0-21.5-8.5T700-70v-376q-48-11-89-35t-71-59l-24 120 72 68q6 6 9 13.5t3 15.5v243q0 17-11.5 28.5T560-40q-17 0-28.5-11.5T520-80v-200l-84-80Zm-178-82-46-9q-16-3-25-16.5t-6-30.5l30-157q6-34 36-51.5t65-10.5q17 3 25.5 16.5T343-670l-38 196q-3 17-16.5 26t-30.5 6Zm225.5-321.5Q460-787 460-820t23.5-56.5Q507-900 540-900t56.5 23.5Q620-853 620-820t-23.5 56.5Q573-740 540-740t-56.5-23.5Z',
+  walk: 'M436-364 371-72q-3 14-14.5 23T330-40q-20 0-32-15t-8-34l102-515-72 28v96q0 17-11.5 28.5T280-440q-17 0-28.5-11.5T240-480v-122q0-12 6.5-21.5T264-638l178-76q14-6 29.5-7t29.5 4q14 5 26.5 14t20.5 23l40 64q13 20 30.5 38t39.5 31q14 8 31 14.5t34 9.5q16 3 26.5 14.5T760-480q0 17-12 28t-29 9q-56-8-100.5-35T541-543l-25 123 72 68q6 6 9 13.5t3 15.5v243q0 17-11.5 28.5T560-40q-17 0-28.5-11.5T520-80v-220l-84-64Zm47.5-399.5Q460-787 460-820t23.5-56.5Q507-900 540-900t56.5 23.5Q620-853 620-820t-23.5 56.5Q573-740 540-740t-56.5-23.5Z',
+  strength: 'M282-622 168-508q-11 11-27.5 11.5T112-508q-11-11-11.5-27.5T111-564l29-30-28-28q-12-12-12-28t12-28l56-56-29-30q-11-11-11-27.5t12-28.5q11-11 27.5-11.5T196-821l30 29 56-56q12-12 28-12t28 12l28 28 30-29q11-11 27.5-11t28.5 12q11 11 11 28t-11 28L338-678l340 340 114-114q11-11 27.5-11.5T848-452q11 11 11.5 27.5T849-396l-29 30 28 28q12 12 12 28t-12 28l-56 56 29 30q11 11 11 27.5T820-140q-11 11-27.5 11.5T764-139l-30-29-56 56q-12 12-28 12t-28-12l-28-28-30 29q-11 11-27.5 11T508-112q-11-11-11-28t11-28l114-114-340-340Z',
+  yoga: 'M272-160q-30 0-51-21t-21-51q0-21 12-39.5t32-26.5l156-62v-90q-48 55-108 87.5T162-322q-17 2-29.5-9.5T120-360q0-17 11-29t28-14q55-8 101-34t84-71l54-64q12-14 28-21t34-7h40q18 0 34 7t28 21l54 64q38 45 84 71t101 34q17 2 28 14t11 29q0 17-12.5 28.5T798-322q-70-8-130-40.5T560-450v90l156 62q20 8 32 26.5t12 39.5q0 30-21 51t-51 21H400v-20q0-26 17-43t43-17h120q9 0 14.5-5.5T600-260q0-9-5.5-14.5T580-280H460q-42 0-71 29t-29 71v20h-88Zm151.5-503.5Q400-687 400-720t23.5-56.5Q447-800 480-800t56.5 23.5Q560-753 560-720t-23.5 56.5Q513-640 480-640t-56.5-23.5Z',
+  row: 'm692-28-80-80q-6-6-9-13.5t-3-15.5v-43L316-464q-9 2-18 3t-18 1v-88q50 2 102-21.5t84-58.5l56-62q13-15 30.5-22.5T590-720q38 0 64 26t26 64v230q0 26-9.5 47.5T644-314L500-456v-92q-20 17-43 31t-49 25l252 252h43q8 0 15.5 3t13.5 9l80 80q12 12 12 28t-12 28l-64 64q-12 12-28 12t-28-12ZM360-280 250-170q-13 13-30 13t-30-13q-13-13-13-30t13-30l150-150 100 100h-80Zm183.5-503.5Q520-807 520-840t23.5-56.5Q567-920 600-920t56.5 23.5Q680-873 680-840t-23.5 56.5Q633-760 600-760t-56.5-23.5ZM249-473q-13-13-13-31t13-31q13-13 31-13t31 13q13 13 13 31t-13 31q-13 13-31 13t-31-13Z',
+};
+function sportIcon(a, size) {
+  const s = size || 14;
+  const d = SPORT_PATHS[sportKind(a)] || SPORT_PATHS.run;
+  return '<svg width="' + s + '" height="' + s + '" viewBox="0 -960 960 960" ' +
+    'class="sic" aria-hidden="true" focusable="false"><path d="' + d + '" fill="currentColor"/></svg>';
+}
 function dataSince() { return dayKey(addDays(new Date(), -400)); }
 
 const BASE_FIELDS = [
@@ -1299,6 +1317,7 @@ async function runCorosSync() {
   toast('正在同步…');
   try {
     const res = await Coros.sync();
+    markCorosAutoDone();            // 手动同步过，今天就不必再自动跑一次
     try { await loadAll(); render(); }
     catch (e) { toast('同步完成，但刷新数据失败：' + ((e && e.message) || '')); return; }
     const w = (res && res.warnings) || [];
@@ -1309,6 +1328,47 @@ async function runCorosSync() {
     toast(e && e.soft ? e.message : 'COROS 同步失败：' + ((e && e.message) || '未知错误，请查看同步诊断'));
   } finally {
     btns.forEach(b => { b.classList.remove('busy'); b.removeAttribute('disabled'); });
+  }
+}
+
+/* ---- 每天首次打开自动同步 COROS ----------------------------------------
+   每天第一次进入应用时静默拉一次当天数据，成功后重载并重绘，用户不用手动点。
+   只在成功时写「今天已同步」标记：失败就留到下次打开重试，不会把当天锁死。 */
+const COROS_AUTO_KEY = 'lb.corosAutoDay';
+let corosAutoBusy = false;
+function corosAutoDoneToday() {
+  try { return localStorage.getItem(COROS_AUTO_KEY) === TODAY(); } catch (e) { return false; }
+}
+function markCorosAutoDone() {
+  try { localStorage.setItem(COROS_AUTO_KEY, TODAY()); } catch (e) {}
+}
+async function syncCorosDaily(opts) {
+  const o = opts || {};
+  if (!window.Coros || !S.user || S.offline || navigator.onLine === false) return { skipped: true };
+  if (corosAutoBusy) return { skipped: true };
+  if (!o.force && corosAutoDoneToday()) return { skipped: true };
+  let st;
+  try { st = Coros.status(); } catch (e) { return { skipped: true }; }
+  if (!st || !st.connected) return { skipped: true };
+  corosAutoBusy = true;
+  try {
+    const res = await Coros.sync();
+    markCorosAutoDone();
+    /* 同步写入云端后必须重新拉一次，否则页面还停在同步前的内存快照 */
+    try { await loadAll(); saveSnapshot(); render(); } catch (e) {}
+    const w = (res && res.warnings) || [];
+    if (!o.silent) {
+      toast('已自动同步 ' + ((res && res.days) || 0) + ' 天身体数据、' +
+        ((res && res.activities) || 0) + ' 条运动' +
+        (w.length ? '，' + w.length + ' 处未识别' : ''));
+    }
+    return { ok: true, res: res };
+  } catch (e) {
+    noteWriteError('corosAutoSync', e);
+    if (!o.silent) toast('COROS 自动同步失败，稍后会自动重试');
+    return { ok: false, error: e };
+  } finally {
+    corosAutoBusy = false;
   }
 }
 
@@ -2710,6 +2770,9 @@ async function enterApp(session) {
     // 先把上次离线攒下的打卡补传，再重载一次让界面与云端一致
     const f = await flushPending();
     if (f.ok) { try { await loadAll(); saveSnapshot(); render(); } catch (e) {} }
+    /* 每天首次打开：静默同步 COROS，成功后自动重载，展示当天最新数据。
+       不 await，避免拖慢首屏；失败只记诊断，不打断使用。 */
+    syncCorosDaily();
   } catch (e) {
     S.loading = false;
     /* 只有真正的网络问题才进入离线模式；服务端报错/数据异常不能被误标成离线，
@@ -2782,6 +2845,7 @@ async function autoRefreshToday(force) {
     lastAutoRefresh = Date.now();
   }
   await refreshAll();
+  syncCorosDaily();               // 跨过零点后重新回到前台，也算「当天首次打开」
 }
 function initAutoRefresh() {
   document.addEventListener('visibilitychange', function () {
@@ -3026,6 +3090,7 @@ window.LifeApp = {
   exportBackup: exportBackup, restoreBackup: restoreBackup, fetchBackupRows: fetchBackupRows,
   askConfirm: askConfirm, renderSkeleton: renderSkeleton,
   clearLocalData: clearLocalData, refreshAll: refreshAll, selectPaged: selectPaged,
+  syncCorosDaily: syncCorosDaily, corosAutoDoneToday: corosAutoDoneToday,
   snapshotOfOtherUser: function () { return snapMismatch; },
   readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,
   sportKind: sportKind, sportIcon: sportIcon, insightOf: insightOf, baselineOf: baselineOf,
