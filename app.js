@@ -1662,7 +1662,10 @@ function renderLibrary() {
   const f = S.filter;
   const books = activeBooks();
   const list = books.filter(b => f === 'all' ? true : b.status === f);
-  const reading = books.filter(b => b.status === 'reading');
+  /* 「继续阅读」只放真正开读的书（有进度），否则同步进来的整架书会在
+     横滑条与下方网格里各出现一遍，看起来像重复导入。 */
+  const reading = books.filter(b => b.status === 'reading' && Number(b.progress) > 0)
+    .sort((a, b) => Number(b.progress) - Number(a.progress)).slice(0, 6);
   const plans = activePlans();
   const weekFrom = dayKey(weekStart(new Date()));
   const weekLogs = S.logs.filter(l => String(l.day).slice(0, 10) >= weekFrom).length;
@@ -1692,7 +1695,7 @@ function renderLibrary() {
     [['all', '全部'], ['reading', '在读'], ['done', '读完']].map(x =>
       '<button class="' + (f === x[0] ? 'on' : '') + '" data-act="filter" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div>';
   if (reading.length && f !== 'done') {
-    left += '<div class="gtitle">正在阅读</div><div class="card"><div class="rail">' + reading.map(b => {
+    left += '<div class="gtitle">继续阅读</div><div class="card"><div class="rail">' + reading.map(b => {
       const n = bookNotes(b.id).length;
       return '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
         '<div class="bk-t">' + esc(b.title) + '</div><div class="bk-a">' + (n ? n + ' 条划线' : esc(b.author || '')) + '</div></div>';
