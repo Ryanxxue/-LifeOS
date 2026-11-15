@@ -643,10 +643,9 @@ TEST = r'''
 
     /* --- P0-1/2/3 今日页 --- */
     goTab('today'); await tick();
-    const insightEl = q1('#view-today .insight');
-    ok('P0-1：今日页给出一句话洞察且可下钻',
-       !!insightEl && /近 7 天|近 7 日常态|身体数据/.test(insightEl.textContent) &&
-       !!insightEl.getAttribute('data-act'));
+    ok('P0-1：今日无身体数据时不再出现整块「还没同步」提示，改为四格下方就近同步',
+       !q1('#view-today .insight') && !/还没同步到本机/.test(q1('#view-today').textContent) &&
+       !!q1('#view-today [data-act="corosSync"]'));
     S.health[dayAt(0)] = { sleep_total: 7.2, hrv: 58, resting_hr: 54, training_load: 40 };
     window.LifeApp.render(); await tick();
     ok('P0-2：有今日身体数据时四格显示个人基线偏移',
@@ -656,9 +655,11 @@ TEST = r'''
     q1('#view-today [data-act="healthdetail"]').click(); await tick();
     ok('P0-2：点按展开近 14 天 sparkline 与基线值',
        !!q1('#health-spark svg.sparkline') && /个人基线/.test(q1('#health-spark').textContent));
-    ok('P1-8：今日页不再有「本周回顾」总结卡（周对比留在趋势页）',
-       !q1('#view-today .review') && !q1('#week-review') &&
-       !/上周/.test(q1('#view-today').textContent));
+    ok('P1-8：今日页有本周回顾折叠卡且含四项环比',
+       !!q1('#view-today .review') && /上周/.test(q1('#view-today .review').textContent) &&
+       document.querySelectorAll('#view-today .review .rv-row').length === 4);
+    ok('P1-8b：真有今日身体数据时洞察卡恢复显示且可下钻趋势',
+       !!q1('#view-today .insight') && !!q1('#view-today .insight').getAttribute('data-act'));
     const beforeHero = q1('#today-hero .val b') ? q1('#today-hero .val b').textContent : '';
     const habitRow = q1('#view-today .lrow[data-act="toggle"]');
     if (habitRow) habitRow.click(); await tick();
@@ -826,10 +827,11 @@ TEST = r'''
     const savedTodayHealth = S.health[dayAt(0)];
     delete S.health[dayAt(0)];
     window.LifeApp.render(); await tick();
-    const insEl = q1('#view-today .insight');
-    ok('今日：无当天身体数据时提示可一键同步 COROS',
-       !!insEl && insEl.getAttribute('data-act') === 'corosSync' &&
-       /今天/.test(insEl.textContent) && /COROS/.test(insEl.textContent));
+    ok('今日：无当天身体数据时，四格下方可一键同步 COROS',
+       !q1('#view-today .insight') &&
+       !!q1('#view-today .health') &&
+       /身体数据未同步/.test(q1('#view-today').textContent) &&
+       q1('#view-today [data-act="corosSync"]').textContent.indexOf('立即同步') >= 0);
     if (savedTodayHealth) S.health[dayAt(0)] = savedTodayHealth;
     window.LifeApp.render();
 
@@ -1076,6 +1078,25 @@ TEST = r'''
     ok('交互：toast 有 role=status 与 aria-live，保存结果可被读屏播报',
        q1('#toast').getAttribute('role') === 'status' &&
        q1('#toast').getAttribute('aria-live') === 'polite');
+
+    /* --- 登录态持久化：会话镜像与复原 --- */
+    const SKEY = 'workbuddy-cloud.session.' + window.APP_CONFIG.cloud.publishableKey;
+    const keepRaw = localStorage.getItem(SKEY);
+    localStorage.setItem(SKEY, JSON.stringify({
+      accessToken: 'a'.repeat(80), refreshToken: 'r'.repeat(24),
+      expiresAt: Date.now() + 3600e3, user: { id: 'u1', name: '测试', raw: { note: 'x' } }
+    }));
+    ok('登录态：会话可写入持久化 cookie（file:// 禁 cookie，只验不抛错且本地会话保留）',
+       window.LifeApp.persistSession() === true && !!localStorage.getItem(SKEY));
+    ok('登录态：本地已有会话时 restore 不覆盖、只续期',
+       window.LifeApp.restoreSession() === false && !!localStorage.getItem(SKEY));
+    localStorage.removeItem(SKEY);
+    let restoreOk = false, restoredBack = 'x';
+    try { restoreOk = window.LifeApp.restoreSession() === false; restoredBack = localStorage.getItem(SKEY); }
+    catch (e) { restoreOk = false; }
+    ok('登录态：本地会话被清后 restore 不报错且不伪造会话',
+       restoreOk && restoredBack === null);
+    if (keepRaw) localStorage.setItem(SKEY, keepRaw); else localStorage.removeItem(SKEY);
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
   }

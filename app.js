@@ -130,6 +130,72 @@ const q = async (p) => {
   return data;
 };
 
+/* ---- 登录态持久化（不设有效期） ------------------------------------------
+   SDK 把会话存在 localStorage 的 workbuddy-cloud.session.<publishableKey>：里面有
+   access_token（约 1 小时）和 refresh_token（SDK 会在到期前自动续期）。问题是
+   iOS 会回收长期不用的脚本可写存储、用户清理网站数据也会连登录一起清掉，结果就是
+   又要收一次验证码。所以把会话再镜像一份到第一方 cookie（Max-Age 取浏览器上限
+   400 天），开机时本地存储空了就用 cookie 里的 refresh_token 复原，再交给 SDK 续期；
+   每次打开/回前台都重写一次，等于滚动续期，实际不会过期。
+   注意：cookie 里是账号凭证，只写 Path=/、SameSite=Lax、https 下加 Secure，
+   退出登录时随会话一起删除。 */
+const SESSION_KEY = 'workbuddy-cloud.session.' +
+  ((window.APP_CONFIG && window.APP_CONFIG.cloud && window.APP_CONFIG.cloud.publishableKey) || '');
+const SESSION_COOKIE = 'lb_session';
+const SESSION_MAXAGE = 400 * 24 * 3600;      // 浏览器对 Max-Age 的上限就是 400 天
+
+function readCookie(name) {
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return m ? m[1] : '';
+}
+function writeCookie(name, value, maxAge) {
+  if (!value) return;
+  document.cookie = name + '=' + value + '; Path=/; Max-Age=' + maxAge +
+    '; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
+}
+function dropCookie(name) {
+  document.cookie = name + '=; Path=/; Max-Age=0; SameSite=Lax' +
+    (location.protocol === 'https:' ? '; Secure' : '');
+}
+/* 只留续期与显示用户要用的字段，避免整串会话超过单条 cookie 4KB 上限 */
+function slimSession(s) {
+  const u = (s && s.user) || {};
+  return {
+    accessToken: String((s && s.accessToken) || ''),
+    refreshToken: String((s && s.refreshToken) || ''),
+    expiresAt: Number((s && s.expiresAt)) || 0,
+    user: { id: u.id || '', name: u.name || '', avatarUrl: u.avatarUrl || '', isAnonymous: !!u.isAnonymous }
+  };
+}
+function persistSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return false;
+    const s = JSON.parse(raw);
+    if (!s || !s.refreshToken) return false;
+    const enc = encodeURIComponent(JSON.stringify(slimSession(s)));
+    if (enc.length > 3900) { console.warn('[session] 会话过大，跳过 cookie 镜像'); return false; }
+    writeCookie(SESSION_COOKIE, enc, SESSION_MAXAGE);
+    return true;
+  } catch (e) { return false; }
+}
+function restoreSession() {
+  let cur = null;
+  try { cur = localStorage.getItem(SESSION_KEY); } catch (e) { return false; }
+  if (cur) { persistSession(); return false; }        // 本地还在，顺手把 cookie 续期
+  const raw = readCookie(SESSION_COOKIE);
+  if (!raw) return false;
+  let s = null;
+  try { s = JSON.parse(decodeURIComponent(raw)); } catch (e) { return false; }
+  if (!s || !s.refreshToken || !s.accessToken) return false;
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(slimSession(s))); } catch (e) { return false; }
+  return true;
+}
+/* 回前台就续一次 cookie：iOS 对脚本写 cookie 有 7 天回收，但只要打开过就一直续上 */
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible') persistSession();
+});
+
 /* ---- 写入可靠性 ----------------------------------------------------------
    云端在请求没带用户 JWT 时会以 owner_id='anon' 把 INSERT「成功」写进去，
    前端拿到 data 就以为保存成功；但随后的 SELECT 被 RLS 过滤，用户看到的是
@@ -1153,6 +1219,51 @@ function cmpHTML(cur, prev, n) {
   return '<div class="cmp ' + (pct > 0 ? 'up' : 'down') + '">' + (pct > 0 ? '↑ ' : '↓ ') +
     Math.abs(Math.round(pct)) + '% · 较前 ' + n + ' 天</div>';
 }
+function weekReview() {
+  const ws = weekStart(new Date());
+  const thisDays = [], prevDays = [];
+  for (let i = 0; i < 7; i++) {
+    const k = dayKey(addDays(ws, i));
+    if (k <= TODAY()) thisDays.push(k);
+  }
+  thisDays.forEach(k => prevDays.push(dayKey(addDays(parseDay(k), -7))));
+  const avgRate = ds => {
+    const v = ds.map(rateOfDay).filter(x => x !== null);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  const avgSleep = ds => {
+    const v = ds.map(d => { const h = S.health[d]; return h && h.sleep_total != null ? Number(h.sleep_total) : null; })
+      .filter(x => x !== null && isFinite(x));
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  const actN = ds => ds.reduce((n, d) => n + activitiesForDay(d).length, 0);
+  const logN = ds => S.logs.filter(l => ds.indexOf(String(l.day).slice(0, 10)) >= 0).length;
+  return [
+    { k: '打卡完成率', cur: avgRate(thisDays), prev: avgRate(prevDays), fmt: v => v === null ? '—' : Math.round(v * 100) + '%' },
+    { k: '平均睡眠', cur: avgSleep(thisDays), prev: avgSleep(prevDays), fmt: v => v === null ? '—' : fmt1(v) + 'h' },
+    { k: '运动次数', cur: actN(thisDays), prev: actN(prevDays), fmt: v => v + ' 次' },
+    { k: '学习记录', cur: logN(thisDays), prev: logN(prevDays), fmt: v => v + ' 次' }
+  ];
+}
+function reviewHTML() {
+  const monday = new Date().getDay() === 1;
+  let html = '<details class="review" id="week-review"' + (monday ? ' open' : '') + '>' +
+    '<summary>本周回顾 · 对比上周 <span class="rs">' + (monday ? '每周一自动展开' : '点此展开') + '</span></summary>' +
+    '<div class="review-body">';
+  weekReview().forEach(r => {
+    let delta = '—', cls = '';
+    if (r.cur !== null && r.prev !== null && r.prev !== 0) {
+      const pct = (r.cur - r.prev) / Math.abs(r.prev) * 100;
+      cls = pct > 0.5 ? 'up' : (pct < -0.5 ? 'down' : '');
+      delta = (pct > 0 ? '↑ ' : pct < 0 ? '↓ ' : '') + Math.abs(Math.round(pct)) + '%';
+    }
+    html += '<div class="rv-row"><span class="rk">' + r.k + '</span>' +
+      '<span class="rv">' + r.fmt(r.cur) + '</span>' +
+      '<span class="rp">上周 ' + r.fmt(r.prev) + '</span>' +
+      '<span class="rd ' + cls + '">' + delta + '</span></div>';
+  });
+  return html + '</div></details>';
+}
 const CORR_FIELDS = [
   ['sleep_total', '睡眠时长'], ['hrv', 'HRV'], ['resting_hr', '静息心率'],
   ['training_load', '训练负荷'], ['steps', '步数'], ['stress', '压力']
@@ -1417,13 +1528,16 @@ function renderToday() {
       (S.editing ? '' : '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div>') + '</div>';
   }
 
+  /* 「今天的身体数据还没同步」这种整块提示不再占位：没数据时下面的身体四格
+     和「立即同步」已经说清楚了，洞察卡只在真有今日数据时出现。 */
   const ins = insightOf();
-  html += '<div class="insight" data-act="' + (ins.sync ? 'corosSync' : 'tab') + '"' +
-    (ins.sync ? '' : ' data-id="trend"') + ' ' +
-    'role="button" tabindex="0" aria-label="' + (ins.sync ? '同步今天的身体数据' : '查看身体数据详情') + '">' +
-    '<div class="ii">' + icon('med', 16) + '</div>' +
-    '<div class="it">' + esc(ins.text) + '<div class="is">' + esc(ins.sub) + '</div></div>' +
-    '<div class="go">' + icon('chev', 15) + '</div></div>';
+  if (!ins.sync) {
+    html += '<div class="insight" data-act="tab" data-id="trend" role="button" tabindex="0" ' +
+      'aria-label="查看身体数据详情">' +
+      '<div class="ii">' + icon('med', 16) + '</div>' +
+      '<div class="it">' + esc(ins.text) + '<div class="is">' + esc(ins.sub) + '</div></div>' +
+      '<div class="go">' + icon('chev', 15) + '</div></div>';
+  }
 
   html += healthCells(day);
   if (!h) {
@@ -1432,7 +1546,7 @@ function renderToday() {
       '<button class="pill" data-act="corosSync" style="font-size:12px;padding:4px 10px">立即同步</button></div>';
   }
 
-  /* 首页不再放「本周回顾」总结模块：周对比信息在趋势页看，今日页只留动作与状态 */
+  html += reviewHTML();
 
   if (reading.length) {
     html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
@@ -2688,6 +2802,7 @@ document.addEventListener('click', async function (ev) {
         okText: '退出登录', danger: false
       }))) break;
       try { await cloud.auth.signOut(); } catch (e) {}
+      dropCookie(SESSION_COOKIE);     // 主动退出时不能留下可复原的会话
       clearLocalData();               // 换账号前必须丢掉上一个人的快照与离线队列
       location.reload();
       break;
@@ -2705,6 +2820,7 @@ function showLogin(msg) {
 
 async function enterApp(session) {
   S.user = session.user || {};
+  persistSession();                       // 登录成功立刻把会话镜像进 cookie
   $('#login-view').hidden = true;
   $('#main').hidden = false;
   S.loading = true;
@@ -2851,11 +2967,20 @@ async function boot() {
     } catch (e) { showLogin((e && e.message) || '登录失败'); return; }
   }
 
-  // 2) 常规会话恢复
+  // 2) 常规会话恢复：本地存储被清过时，先用 cookie 里的 refresh_token 复原
+  restoreSession();
   let session = null;
   try {
     const r = await cloud.auth.getSession();
-    if (r.error) console.warn('[auth] getSession', r.error.message);
+    if (r.error) {
+      console.warn('[auth] getSession', r.error.message);
+      // 凭证被服务端明确拒绝（refresh_token 失效）时，留着 cookie 只会每次启动都白试一次
+      const code = r.error.code || r.error.kind || '';
+      if (code === 'invalid_grant' || code === 'unauthenticated') {
+        dropCookie(SESSION_COOKIE);
+        try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+      }
+    }
     session = r.data || null;
   } catch (e) { console.warn('[auth]', e); }
 
@@ -3053,10 +3178,11 @@ window.LifeApp = {
   readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,
   sportKind: sportKind, sportIcon: sportIcon, insightOf: insightOf, baselineOf: baselineOf,
   fieldDelta: fieldDelta, sparkSVG: sparkSVG, cmpHTML: cmpHTML, avgMetric: avgMetric,
-  factorInsights: factorInsights, dataHealth: dataHealth,
+  weekReview: weekReview, factorInsights: factorInsights, dataHealth: dataHealth,
   renderFreshness: renderFreshness, swipeMonth: swipeMonth, openQuickSheet: openQuickSheet,
   openCalJumpSheet: openCalJumpSheet, runCorosSync: runCorosSync,
-  patchCheckinUI: patchCheckinUI, chartSVG: chartSVG,
+  patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML,
+  persistSession: persistSession, restoreSession: restoreSession,
   applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight,
   initNavScroll: initNavScroll, autoRefreshToday: autoRefreshToday,
   flushPending: flushPending, findRowId: findRowId, draftGet: draftGet, draftClear: draftClear,
