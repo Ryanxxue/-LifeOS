@@ -2187,6 +2187,7 @@ function render() {
     const again = document.querySelector(sel);
     if (again && again.focus) { try { again.focus({ preventScroll: true }); } catch (e) {} }
   }
+  syncStickyBars();
 }
 
 function go(view) {
@@ -2870,19 +2871,22 @@ async function enterApp(session) {
 }
 
 /* iOS 大标题：滚动后收起为内联标题，导航栏才出现材质与滚动边缘分隔 */
-function initNavScroll() {
+/* 顶栏与书架吸顶工具条的材质开关：重绘后也要重算，否则停在半途会丢材质 */
+function syncStickyBars() {
   const nav = $('.navbar');
-  if (!nav) return;
+  const y = window.scrollY || document.documentElement.scrollTop || 0;
+  if (nav) nav.classList.toggle('scrolled', y > 24);
+  const ln = $('.lib-nav');
+  if (ln) ln.classList.toggle('stuck', ln.getBoundingClientRect().top <= 53);
+}
+function initNavScroll() {
+  if (!$('.navbar')) return;
   let queued = false;
-  const update = () => {
-    const y = window.scrollY || document.documentElement.scrollTop || 0;
-    nav.classList.toggle('scrolled', y > 24);
-    queued = false;
-  };
   window.addEventListener('scroll', function () {
-    if (!queued) { queued = true; requestAnimationFrame(update); }
+    if (!queued) { queued = true; requestAnimationFrame(function () { syncStickyBars(); queued = false; }); }
   }, { passive: true });
-  update();
+  window.addEventListener('resize', syncStickyBars, { passive: true });
+  syncStickyBars();
 }
 
 /* COROS 把今天的数据写进云端后，页面可能还停在旧的内存快照；
@@ -3184,7 +3188,7 @@ window.LifeApp = {
   patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML,
   persistSession: persistSession, restoreSession: restoreSession,
   applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight,
-  initNavScroll: initNavScroll, autoRefreshToday: autoRefreshToday,
+  initNavScroll: initNavScroll, syncStickyBars: syncStickyBars, autoRefreshToday: autoRefreshToday,
   flushPending: flushPending, findRowId: findRowId, draftGet: draftGet, draftClear: draftClear,
   loadWereadState: loadWereadState, openWereadSyncSheet: openWereadSyncSheet,
   applyShelf: applyShelf, wereadStatusText: wereadStatusText

@@ -155,8 +155,8 @@ svg{display:block}
 .bk-a{font-size:11px;color:var(--text-3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* 分段控件 */
-.seg{display:flex;background:var(--fill);border-radius:9px;padding:2px;margin:0 0 12px}
-.seg button{flex:1;padding:6px 0;font-size:13px;border-radius:7px;color:var(--text);transition:background .15s}
+.seg{display:flex;background:var(--fill);border-radius:12px;padding:3px;margin:0 0 12px}
+.seg button{flex:1;padding:6px 0;font-size:13px;border-radius:9px;color:var(--text);transition:background .15s}
 .seg button.on{background:#636366;font-weight:500;box-shadow:0 1px 3px rgba(0,0,0,.5)}
 :root[data-theme="light"] .seg button.on{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 
@@ -419,8 +419,10 @@ svg{display:block}
 .legend .lg-act svg{display:block}
 
 /* ---------- 合并页分段与桌面双列 ---------- */
-.lib-nav{position:sticky;top:52px;z-index:15;background:var(--bg);padding:6px 0 4px;margin:0 0 12px;border-bottom:.5px solid var(--sep)}
+.lib-nav{position:sticky;top:52px;z-index:15;background:var(--bg);padding:8px 0 10px;margin:0 0 12px;border-bottom:.5px solid var(--sep)}
 .lib-nav .seg{margin:0}
+/* 脚注后面紧跟分段控件时给 12px：否则「上次同步…」会顶着 全部/在读/读完 */
+.gfoot + .seg{margin-top:12px}
 .lib-cols{display:block}
 @media(min-width:900px){.lib-cols{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start}}
 #lib-books,#lib-plans,#lib-logs{scroll-margin-top:112px}
@@ -562,18 +564,38 @@ html[data-glass="on"][data-theme="light"] #toast{
 html[data-glass="on"] .navbar{background-color:transparent;border-bottom:.5px solid transparent}
 html[data-glass="on"] .navbar.scrolled{background-color:var(--glass-fill);border-bottom-color:var(--glass-edge)}
 html[data-glass="on"] .sidebar{border-right:.5px solid var(--glass-edge)}
-html[data-glass="on"] .lib-nav{background-color:transparent;border-bottom:.5px solid var(--glass-edge)}
+html[data-glass="on"] .lib-nav{
+  margin-left:-16px;margin-right:-16px;padding:8px 16px 10px;
+  background-color:transparent;background-image:none;
+  border-bottom-color:transparent;box-shadow:none;
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+  transition:background-color .2s,border-color .2s,box-shadow .2s;
+}
+/* 只在自己吸顶时才上材质：停在顶部时保持干净，滚动后内容才不会从控件缝里穿过去 */
+html[data-glass="on"] .lib-nav.stuck{
+  background-color:var(--glass-fill);
+  background-image:linear-gradient(160deg, rgba(255,255,255,.16), rgba(255,255,255,.02) 46%, transparent 72%);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(180%);
+  backdrop-filter:blur(var(--glass-blur)) saturate(180%);
+  border-bottom-color:var(--glass-edge);
+  box-shadow:inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+}
 /* 控件玻璃：胶囊分段、圆形按钮、按压时的 interactive 缩放反馈 */
-html[data-glass="on"] :is(.seg,.iconbtn,.pill,.sw,.btn-ghost,.quick-q,.a-btn.cancel,.btnblock.gray){
+html[data-glass="on"] :is(.seg,.iconbtn,.pill,.sw,.btn-ghost,.quick-q),
+html[data-glass="on"] :is(.a-btn.cancel,.btnblock.gray){
   background-color:var(--glass-fill-2);
   border:.5px solid var(--glass-edge);
   box-shadow:inset 0 1px 0 var(--glass-hi), 0 2px 8px rgba(0,0,0,.12);
 }
 html[data-glass="on"] .sw.on{background-color:var(--green)}
-html[data-glass="on"] .seg{border-radius:999px;padding:3px}
+html[data-glass="on"] .seg{
+  border-radius:999px;padding:4px;
+  border-color:transparent;                       /* 外圈不再描边，内层高亮才是唯一的边 */
+  box-shadow:inset 0 1px 0 var(--glass-hi);       /* 去掉投影，控件不再"浮"起来 */
+}
 html[data-glass="on"] .seg button{border-radius:999px}
 html[data-glass="on"] .seg button.on{background-color:#636366;color:#fff;
-  box-shadow:0 1px 4px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.22)}
+  box-shadow:0 1px 3px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.18)}
 html[data-glass="on"][data-theme="light"] .seg button.on{background-color:#fff;color:var(--text);
   box-shadow:0 1px 4px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.90)}
 html[data-glass="on"] :is(.iconbtn,.pill){border-radius:999px;transition:transform .18s cubic-bezier(.32,.72,0,1)}

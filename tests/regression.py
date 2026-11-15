@@ -800,7 +800,7 @@ TEST = r'''
        Math.abs(q1('#nav-title').getBoundingClientRect().top -
                 q1('#btn-quick').getBoundingClientRect().top) < 30);
     ok('iOS 组件：胶囊分段与 inset grouped 缩进分隔线',
-       /html\[data-glass="on"\] \.seg\{border-radius:999px/.test(cssText) &&
+       /html\[data-glass="on"\] \.seg\{\s*border-radius:999px/.test(cssText) &&
        /\.card \.lrow:not\(:last-child\)/.test(cssText));
 
     ok('液态玻璃：环境光、镜面高光、光源跟随与减弱透明度降级齐全',
@@ -1096,6 +1096,16 @@ TEST = r'''
     catch (e) { restoreOk = false; }
     ok('登录态：本地会话被清后 restore 不报错且不伪造会话',
        restoreOk && restoredBack === null);
+
+    /* --- 书架吸顶工具条：只有真被顶住时才上材质 --- */
+    goTab('library'); await tick();
+    window.scrollTo(0, 420); await tick();
+    window.LifeApp.syncStickyBars();
+    ok('交互：书架吸顶工具条滚动后才上材质', !!q1('.lib-nav') && q1('.lib-nav').classList.contains('stuck'));
+    window.scrollTo(0, 0); await tick();
+    window.LifeApp.syncStickyBars();
+    ok('交互：回到顶部时工具条恢复透明（不留灰带）',
+       !!q1('.lib-nav') && !q1('.lib-nav').classList.contains('stuck'));
     if (keepRaw) localStorage.setItem(SKEY, keepRaw); else localStorage.removeItem(SKEY);
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
