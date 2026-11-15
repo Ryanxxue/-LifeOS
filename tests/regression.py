@@ -656,9 +656,9 @@ TEST = r'''
     q1('#view-today [data-act="healthdetail"]').click(); await tick();
     ok('P0-2：点按展开近 14 天 sparkline 与基线值',
        !!q1('#health-spark svg.sparkline') && /个人基线/.test(q1('#health-spark').textContent));
-    ok('P1-8：今日页有本周回顾折叠卡且含四项对比',
-       !!q1('#view-today .review') && /上周/.test(q1('#view-today .review').textContent) &&
-       document.querySelectorAll('#view-today .review .rv-row').length === 4);
+    ok('P1-8：今日页不再有「本周回顾」总结卡（周对比留在趋势页）',
+       !q1('#view-today .review') && !q1('#week-review') &&
+       !/上周/.test(q1('#view-today').textContent));
     const beforeHero = q1('#today-hero .val b') ? q1('#today-hero .val b').textContent : '';
     const habitRow = q1('#view-today .lrow[data-act="toggle"]');
     if (habitRow) habitRow.click(); await tick();

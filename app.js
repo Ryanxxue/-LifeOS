@@ -1153,51 +1153,6 @@ function cmpHTML(cur, prev, n) {
   return '<div class="cmp ' + (pct > 0 ? 'up' : 'down') + '">' + (pct > 0 ? '↑ ' : '↓ ') +
     Math.abs(Math.round(pct)) + '% · 较前 ' + n + ' 天</div>';
 }
-function weekReview() {
-  const ws = weekStart(new Date());
-  const thisDays = [], prevDays = [];
-  for (let i = 0; i < 7; i++) {
-    const k = dayKey(addDays(ws, i));
-    if (k <= TODAY()) thisDays.push(k);
-  }
-  thisDays.forEach(k => prevDays.push(dayKey(addDays(parseDay(k), -7))));
-  const avgRate = ds => {
-    const v = ds.map(rateOfDay).filter(x => x !== null);
-    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-  };
-  const avgSleep = ds => {
-    const v = ds.map(d => { const h = S.health[d]; return h && h.sleep_total != null ? Number(h.sleep_total) : null; })
-      .filter(x => x !== null && isFinite(x));
-    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-  };
-  const actN = ds => ds.reduce((n, d) => n + activitiesForDay(d).length, 0);
-  const logN = ds => S.logs.filter(l => ds.indexOf(String(l.day).slice(0, 10)) >= 0).length;
-  return [
-    { k: '打卡完成率', cur: avgRate(thisDays), prev: avgRate(prevDays), fmt: v => v === null ? '—' : Math.round(v * 100) + '%' },
-    { k: '平均睡眠', cur: avgSleep(thisDays), prev: avgSleep(prevDays), fmt: v => v === null ? '—' : fmt1(v) + 'h' },
-    { k: '运动次数', cur: actN(thisDays), prev: actN(prevDays), fmt: v => v + ' 次' },
-    { k: '学习记录', cur: logN(thisDays), prev: logN(prevDays), fmt: v => v + ' 次' }
-  ];
-}
-function reviewHTML() {
-  const monday = new Date().getDay() === 1;
-  let html = '<details class="review" id="week-review"' + (monday ? ' open' : '') + '>' +
-    '<summary>本周回顾 · 对比上周 <span class="rs">' + (monday ? '每周一自动展开' : '点此展开') + '</span></summary>' +
-    '<div class="review-body">';
-  weekReview().forEach(r => {
-    let delta = '—', cls = '';
-    if (r.cur !== null && r.prev !== null && r.prev !== 0) {
-      const pct = (r.cur - r.prev) / Math.abs(r.prev) * 100;
-      cls = pct > 0.5 ? 'up' : (pct < -0.5 ? 'down' : '');
-      delta = (pct > 0 ? '↑ ' : pct < 0 ? '↓ ' : '') + Math.abs(Math.round(pct)) + '%';
-    }
-    html += '<div class="rv-row"><span class="rk">' + r.k + '</span>' +
-      '<span class="rv">' + r.fmt(r.cur) + '</span>' +
-      '<span class="rp">上周 ' + r.fmt(r.prev) + '</span>' +
-      '<span class="rd ' + cls + '">' + delta + '</span></div>';
-  });
-  return html + '</div></details>';
-}
 const CORR_FIELDS = [
   ['sleep_total', '睡眠时长'], ['hrv', 'HRV'], ['resting_hr', '静息心率'],
   ['training_load', '训练负荷'], ['steps', '步数'], ['stress', '压力']
@@ -1477,7 +1432,7 @@ function renderToday() {
       '<button class="pill" data-act="corosSync" style="font-size:12px;padding:4px 10px">立即同步</button></div>';
   }
 
-  html += reviewHTML();
+  /* 首页不再放「本周回顾」总结模块：周对比信息在趋势页看，今日页只留动作与状态 */
 
   if (reading.length) {
     html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
@@ -1961,7 +1916,7 @@ function renderTrend() {
                         : '<span><i style="background:var(--blue)"></i>完成率</span>');
   html += '<div class="chartcard"><div class="chart-head"><div class="t">' + title1 + '</div>' +
     '<div class="lg">' + lg1 + '</div></div>' + chartSVG(days, lines1, { hit: true }) + '</div>' +
-    '<div class="gfoot" style="margin-left:6px">' +
+    '<div class="gfoot">' +
     (mode === 'both' ? '完成率按当日有效打卡项计算（0–100%），睡眠按 0–10 小时，各自缩放；' : '单一指标，纵轴为该指标本身；') +
     '断口表示当天没有数据。末端数字为当前值，点按图表任意日期可跳到当天记录。</div>';
 
@@ -2093,8 +2048,8 @@ function renderMe() {
       '</div>').join('') : '<div class="empty" style="padding:22px 16px">还没有打卡项</div>') +
     '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div></div>';
 
-  html += '<div style="margin-top:22px"><button class="btnblock gray danger" data-act="logout">退出登录</button></div>';
-  html += '<div class="gfoot" style="text-align:center;margin-top:14px">数据存储在你的云端账户，多设备同一账号即可同步。<br>' +
+  html += '<div style="margin-top:24px"><button class="btnblock gray danger" data-act="logout">退出登录</button></div>';
+  html += '<div class="gfoot" style="text-align:center;margin-top:12px">数据存储在你的云端账户，多设备同一账号即可同步。<br>' +
     '构建 ' + esc(window.__LB_BUILD__ || 'dev') + ' · 离线时显示本机最后一次同步的数据</div>';
 
   $('#view-me').innerHTML = html;
@@ -3098,10 +3053,10 @@ window.LifeApp = {
   readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,
   sportKind: sportKind, sportIcon: sportIcon, insightOf: insightOf, baselineOf: baselineOf,
   fieldDelta: fieldDelta, sparkSVG: sparkSVG, cmpHTML: cmpHTML, avgMetric: avgMetric,
-  weekReview: weekReview, factorInsights: factorInsights, dataHealth: dataHealth,
+  factorInsights: factorInsights, dataHealth: dataHealth,
   renderFreshness: renderFreshness, swipeMonth: swipeMonth, openQuickSheet: openQuickSheet,
   openCalJumpSheet: openCalJumpSheet, runCorosSync: runCorosSync,
-  patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML,
+  patchCheckinUI: patchCheckinUI, chartSVG: chartSVG,
   applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight,
   initNavScroll: initNavScroll, autoRefreshToday: autoRefreshToday,
   flushPending: flushPending, findRowId: findRowId, draftGet: draftGet, draftClear: draftClear,
