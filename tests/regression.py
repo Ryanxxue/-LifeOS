@@ -788,10 +788,10 @@ TEST = r'''
     const tabBg = tabEl ? getComputedStyle(tabEl).backgroundColor : '';
     const navBg = navEl ? getComputedStyle(navEl).backgroundColor : '';
     ok('iOS 26：标签栏是浮动玻璃胶囊',
-       tbRadius >= 20 && tbLeft >= 8 && /border-radius:26px/.test(cssText),
+       tbRadius >= 20 && tbLeft >= 8 && /border-radius:28px/.test(cssText),
        'r=' + tbRadius + ' left=' + tbLeft);
     ok('iOS 26：组件覆盖未被 :is() 里的 ID 特异性压掉',
-       /30, 30, 36/.test(tabBg) && /rgba\(0, 0, 0, 0\)|transparent/.test(navBg),
+       /rgba\(26, 26, 32/.test(tabBg) && /rgba\(0, 0, 0, 0\)|transparent/.test(navBg),
        'tab=' + tabBg + ' nav=' + navBg);
     ok('顶栏：左侧标题与右侧设置项常显在同一行',
        /\.navbar h1\{font-size:17px;font-weight:600[^\n]*opacity:1/.test(cssText) &&

@@ -460,23 +460,36 @@ svg{display:block}
 @property --gy{syntax:'<percentage>';inherits:true;initial-value:0%}
 :root{
   /* 导航/控制层 = Liquid Glass；内容层 = 系统材料（半透明实色、不模糊），遵循 HIG 的层级划分 */
-  --glass-fill:rgba(44,44,52,.56); --glass-fill-2:rgba(58,58,68,.62);
+  --glass-fill:rgba(40,40,48,.50); --glass-fill-2:rgba(48,48,56,.56);
   --glass-content:rgba(30,30,34,.86); --glass-content-2:rgba(40,40,46,.90);
-  --glass-content-edge:rgba(255,255,255,.10); --glass-bar-fill:rgba(30,30,36,.92);
-  --glass-edge:rgba(255,255,255,.20); --glass-hi:rgba(255,255,255,.34);
-  --glass-spec:rgba(255,255,255,.10);
-  --glass-blur:16px; --glass-blur-strong:24px;
-  --glass-shadow:0 12px 32px rgba(0,0,0,.30);
+  --glass-content-edge:rgba(255,255,255,.10); --glass-bar-fill:rgba(26,26,32,.72);
+  /* 压在滚动内容上的顶栏/吸顶工具条：比静止态厚，否则彩色封面会糊成一片脏色 */
+  --glass-nav:rgba(22,22,27,.72);
+  --glass-edge:rgba(255,255,255,.14); --glass-hi:rgba(255,255,255,.30);
+  --glass-spec:rgba(255,255,255,.12);
+  /* 透镜边缘：内环细边 + 底部内反光，让玻璃"有厚度"而不是一层塑料膜 */
+  --glass-rim:rgba(255,255,255,.13);
+  --glass-under:rgba(255,255,255,.09);
+  /* 控件（分段、圆形按钮、胶囊）：不用模糊，只叠一层很淡的白，避免灰塑料感 */
+  --glass-chip:rgba(255,255,255,.105); --glass-chip-edge:rgba(255,255,255,.14);
+  /* 厚玻璃：弹层/提示条压在内容上，必须透得少才读得清（HIG 的 thick material） */
+  --glass-thick:rgba(26,26,31,.90);
+  --glass-blur:20px; --glass-blur-strong:28px;
+  --glass-shadow:0 14px 38px rgba(0,0,0,.34);
   --gx:18%; --gy:0%;
 }
 :root[data-theme="light"]{
-  --glass-fill:rgba(255,255,255,.66); --glass-fill-2:rgba(255,255,255,.78);
+  --glass-fill:rgba(255,255,255,.62); --glass-fill-2:rgba(255,255,255,.72);
   --glass-content:rgba(255,255,255,.90); --glass-content-2:rgba(255,255,255,.94);
-  --glass-content-edge:rgba(255,255,255,.92); --glass-bar-fill:rgba(255,255,255,.94);
-  --glass-edge:rgba(255,255,255,.92); --glass-hi:rgba(255,255,255,.98);
-  --glass-spec:rgba(255,255,255,.40);
-  --glass-blur:18px; --glass-blur-strong:26px;
-  --glass-shadow:0 12px 30px rgba(60,60,67,.13);
+  --glass-content-edge:rgba(255,255,255,.92); --glass-bar-fill:rgba(252,252,254,.80);
+  --glass-nav:rgba(250,250,253,.80);
+  --glass-edge:rgba(255,255,255,.86); --glass-hi:rgba(255,255,255,.96);
+  --glass-spec:rgba(255,255,255,.46);
+  --glass-rim:rgba(255,255,255,.72); --glass-under:rgba(255,255,255,.55);
+  --glass-chip:rgba(255,255,255,.62); --glass-chip-edge:rgba(255,255,255,.82);
+  --glass-thick:rgba(255,255,255,.92);
+  --glass-blur:22px; --glass-blur-strong:30px;
+  --glass-shadow:0 14px 34px rgba(60,60,67,.16);
 }
 html[data-glass="on"]{--r:18px;--text-2:rgba(235,235,245,.70);--text-3:rgba(235,235,245,.52)}
 html[data-glass="on"][data-theme="light"]{--text-2:rgba(60,60,67,.64);--text-3:rgba(60,60,67,.50)}
@@ -485,12 +498,12 @@ html[data-glass="on"][data-theme="light"]{--text-2:rgba(60,60,67,.64);--text-3:r
 html[data-glass="on"] body{
   background-color:var(--bg);
   background-image:
-    linear-gradient(180deg, rgba(56,68,88,.16), rgba(18,18,24,.05) 48%, rgba(50,44,62,.12)),
-    radial-gradient(70% 52% at 12% 0%, rgba(120,158,205,.14), transparent 72%),
-    radial-gradient(60% 46% at 90% 10%, rgba(176,158,196,.09), transparent 72%),
-    radial-gradient(64% 54% at 80% 90%, rgba(120,166,158,.07), transparent 72%),
-    radial-gradient(48% 42% at 14% 92%, rgba(206,170,132,.07), transparent 72%),
-    radial-gradient(42% 34% at var(--gx) var(--gy), rgba(255,255,255,.07), transparent 70%);
+    linear-gradient(180deg, rgba(58,70,92,.18), rgba(18,18,24,.05) 46%, rgba(52,44,64,.14)),
+    radial-gradient(70% 52% at 12% 0%, rgba(118,158,208,.20), transparent 72%),
+    radial-gradient(60% 46% at 90% 10%, rgba(176,152,200,.14), transparent 72%),
+    radial-gradient(64% 54% at 80% 90%, rgba(110,168,158,.11), transparent 72%),
+    radial-gradient(48% 42% at 14% 92%, rgba(210,170,130,.10), transparent 72%),
+    radial-gradient(42% 34% at var(--gx) var(--gy), rgba(255,255,255,.10), transparent 70%);
   background-attachment:fixed;
 }
 html[data-glass="on"][data-theme="light"] body{
@@ -535,26 +548,46 @@ html[data-glass="on"] .sheet .card{
 html[data-glass="on"] :is(.navbar,.tabbar,.sidebar,.sheet,.lib-nav),
 html[data-glass="on"] #toast{
   background-color:var(--glass-fill-2);
-  background-image:linear-gradient(160deg, rgba(255,255,255,.16), rgba(255,255,255,.02) 46%, transparent 72%);
-  -webkit-backdrop-filter:blur(var(--glass-blur-strong)) saturate(185%);
-  backdrop-filter:blur(var(--glass-blur-strong)) saturate(185%);
+  background-image:
+    linear-gradient(160deg, rgba(255,255,255,.16), rgba(255,255,255,.02) 44%, transparent 70%),
+    radial-gradient(140% 70% at 50% -30%, var(--glass-under), transparent 62%);
+  -webkit-backdrop-filter:blur(var(--glass-blur-strong)) saturate(200%);
+  backdrop-filter:blur(var(--glass-blur-strong)) saturate(200%);
   border-color:var(--glass-edge);
-  box-shadow:inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+  box-shadow:
+    inset 0 1px 0 var(--glass-hi),
+    inset 0 0 0 .5px var(--glass-rim),
+    var(--glass-shadow);
 }
 /* iOS 26：标签栏是浮在内容之上的玻璃胶囊，不是通栏色块；内容从下方透出 */
 html[data-glass="on"] .tabbar{
   left:12px;right:12px;bottom:calc(10px + var(--safe-b));
   background-color:var(--glass-bar-fill);
-  border:.5px solid var(--glass-edge);border-radius:26px;
+  background-image:
+    linear-gradient(165deg, rgba(255,255,255,.20), rgba(255,255,255,.03) 40%, transparent 66%),
+    radial-gradient(150% 80% at 50% -40%, rgba(255,255,255,.12), transparent 60%);
+  border:.5px solid var(--glass-edge);border-radius:28px;
   padding-bottom:0;overflow:hidden;
-  box-shadow:0 12px 36px rgba(0,0,0,.40), inset 0 1px 0 var(--glass-hi);
+  box-shadow:
+    0 18px 44px rgba(0,0,0,.44),
+    inset 0 1px 0 rgba(255,255,255,.34),
+    inset 0 0 0 .5px var(--glass-rim),
+    inset 0 -12px 22px -16px rgba(255,255,255,.12);
 }
-html[data-glass="on"] .tabbar-in{border-radius:26px}
+html[data-glass="on"] .tabbar-in{border-radius:28px}
 html[data-glass="on"] .tab{padding:9px 0 8px;transition:transform .18s cubic-bezier(.32,.72,0,1)}
 html[data-glass="on"] .tab:active{transform:scale(.9)}
-html[data-glass="on"] .sheet{position:relative;border-radius:28px 28px 0 0}
+html[data-glass="on"] .sheet{
+  position:relative;border-radius:28px 28px 0 0;
+  background-color:var(--glass-thick);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14), 0 -18px 40px rgba(0,0,0,.36);
+}
 html[data-glass="on"] .a-box{border-radius:24px}
-html[data-glass="on"] #toast{border-radius:22px;border:.5px solid var(--glass-edge)}
+html[data-glass="on"] #toast{
+  border-radius:22px;border:.5px solid var(--glass-edge);
+  background-color:var(--glass-thick);
+  box-shadow:0 14px 38px rgba(0,0,0,.40), inset 0 1px 0 rgba(255,255,255,.16);
+}
 html[data-glass="on"][data-theme="light"] #toast{
   background-color:rgba(28,28,30,.74);color:#fff;border-color:rgba(255,255,255,.22);
   -webkit-backdrop-filter:blur(var(--glass-blur-strong)) saturate(180%);
@@ -562,7 +595,10 @@ html[data-glass="on"][data-theme="light"] #toast{
 }
 /* 大标题滚动前 navbar 无实色背景，滚动后才出现材质与滚动边缘分隔 */
 html[data-glass="on"] .navbar{background-color:transparent;border-bottom:.5px solid transparent}
-html[data-glass="on"] .navbar.scrolled{background-color:var(--glass-fill);border-bottom-color:var(--glass-edge)}
+html[data-glass="on"] .navbar.scrolled{
+  background-color:var(--glass-nav);border-bottom-color:var(--glass-edge);
+  box-shadow:0 10px 28px -22px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.10);
+}
 html[data-glass="on"] .sidebar{border-right:.5px solid var(--glass-edge)}
 html[data-glass="on"] .lib-nav{
   margin-left:-16px;margin-right:-16px;padding:8px 16px 10px;
@@ -573,7 +609,7 @@ html[data-glass="on"] .lib-nav{
 }
 /* 只在自己吸顶时才上材质：停在顶部时保持干净，滚动后内容才不会从控件缝里穿过去 */
 html[data-glass="on"] .lib-nav.stuck{
-  background-color:var(--glass-fill);
+  background-color:var(--glass-nav);
   background-image:linear-gradient(160deg, rgba(255,255,255,.16), rgba(255,255,255,.02) 46%, transparent 72%);
   -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(180%);
   backdrop-filter:blur(var(--glass-blur)) saturate(180%);
@@ -583,9 +619,10 @@ html[data-glass="on"] .lib-nav.stuck{
 /* 控件玻璃：胶囊分段、圆形按钮、按压时的 interactive 缩放反馈 */
 html[data-glass="on"] :is(.seg,.iconbtn,.pill,.sw,.btn-ghost,.quick-q),
 html[data-glass="on"] :is(.a-btn.cancel,.btnblock.gray){
-  background-color:var(--glass-fill-2);
-  border:.5px solid var(--glass-edge);
-  box-shadow:inset 0 1px 0 var(--glass-hi), 0 2px 8px rgba(0,0,0,.12);
+  background-color:var(--glass-chip);
+  background-image:linear-gradient(160deg, rgba(255,255,255,.10), transparent 62%);
+  border:.5px solid var(--glass-chip-edge);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.18), 0 1px 3px rgba(0,0,0,.18);
 }
 html[data-glass="on"] .sw.on{background-color:var(--green)}
 html[data-glass="on"] .seg{
@@ -594,12 +631,22 @@ html[data-glass="on"] .seg{
   box-shadow:inset 0 1px 0 var(--glass-hi);       /* 去掉投影，控件不再"浮"起来 */
 }
 html[data-glass="on"] .seg button{border-radius:999px}
-html[data-glass="on"] .seg button.on{background-color:#636366;color:#fff;
-  box-shadow:0 1px 3px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.18)}
+/* 选中态改成"更亮的一层玻璃"，而不是一块灰塑料；底色透明后由外到内亮度递增 */
+html[data-glass="on"] .seg button.on{
+  background-color:rgba(255,255,255,.26);
+  background-image:linear-gradient(160deg, rgba(255,255,255,.26), rgba(255,255,255,.06) 62%);
+  color:#fff;
+  box-shadow:
+    0 1px 3px rgba(0,0,0,.26),
+    inset 0 1px 0 rgba(255,255,255,.34),
+    inset 0 0 0 .5px rgba(255,255,255,.12);
+}
 html[data-glass="on"][data-theme="light"] .seg button.on{background-color:#fff;color:var(--text);
   box-shadow:0 1px 4px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.90)}
 html[data-glass="on"] :is(.iconbtn,.pill){border-radius:999px;transition:transform .18s cubic-bezier(.32,.72,0,1)}
 html[data-glass="on"] :is(.iconbtn,.pill):active{transform:scale(.9)}
+html[data-glass="on"] :is(.seg button,.iconbtn,.pill,.btn-block,.quick-q,.tab):active{filter:brightness(1.18)}
+html[data-glass="on"] :is(.lrow,.addrow,.rowbtn):active{background-color:rgba(255,255,255,.06)}
 html[data-glass="on"] .cal-cell{border:.5px solid rgba(255,255,255,.07);text-shadow:0 1px 2px rgba(0,0,0,.35)}
 html[data-glass="on"] .act-badge{box-shadow:0 0 0 1px rgba(255,255,255,.22), 0 2px 8px rgba(0,0,0,.28)}
 html[data-glass="on"] .bk-cover{box-shadow:0 8px 18px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.28)}
@@ -616,7 +663,7 @@ html[data-glass="on"] .login-brand{box-shadow:inset 0 1px 0 rgba(255,255,255,.35
   html[data-glass="on"] :is(.lrow,.addrow,.rowbtn){background-color:var(--card)}
   html[data-glass="on"] .sw.on{background-color:var(--green)}
   html[data-glass="on"] .seg button.on{background-color:var(--fill-2);box-shadow:none}
-  html[data-glass="on"] .tabbar{border-radius:26px}
+  html[data-glass="on"] .tabbar{border-radius:28px}
 }
 /* 老浏览器没有 backdrop-filter 时不留半透明底 */
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
