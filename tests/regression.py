@@ -112,6 +112,15 @@ MOCK = r'''
         if (t === 'activities' && store[t].some(x => String(x.external_id) === String(r.external_id))) {
           throw new Error('duplicate key value violates unique constraint "activities_owner_id_external_id_key"');
         }
+        if (t === 'books') {
+          const nt = String(r.title || '').trim().toLowerCase();
+          if (store[t].some(x => !x.deleted_at && String(x.title || '').trim().toLowerCase() === nt)) {
+            throw new Error('duplicate key value violates unique constraint "books_owner_title_key"');
+          }
+          if (r.external_id && store[t].some(x => !x.deleted_at && String(x.external_id) === String(r.external_id))) {
+            throw new Error('duplicate key value violates unique constraint "books_owner_ext_key"');
+          }
+        }
         store[t].push(r);
         out.push(clone(r));
       }
@@ -875,6 +884,20 @@ TEST = r'''
        window.LifeApp.activeBooks().length === booksBeforeSync + 1 &&
        !!window.LifeApp.S.wereadSyncAt &&
        window.LifeApp.S.books.some(b => b.title === 'API 同步的书' && b.source === 'weread'));
+
+    /* --- 书架查重：DB 唯一索引兜底，前端要给人话而不是 SQL 报错 --- */
+    const dupBefore = window.LifeApp.activeBooks().length;
+    window.LifeApp.go('library'); await tick();
+    window.LifeApp.openQuickSheet(); await tick();
+    q1('[data-act="quickgo"][data-do="addbook"]').click(); await tick();
+    q1('[data-act="manualbook"]').click(); await tick();
+    q1('#mb-title').value = '  API 同步的书  ';      // 前后空格与大小写都要被归一化
+    q1('#mb-title').dispatchEvent(new Event('input', { bubbles: true }));
+    q1('[data-act="savemanualbook"]').click(); await sleep(120);
+    ok('书架查重：同名书（含空格差异）不会新增，提示已在书架里',
+       window.LifeApp.activeBooks().length === dupBefore &&
+       /已经在书架里/.test(q1('#toast').textContent));
+    window.LifeApp.closeSheet();
     /* ==================== 交互可达性 / 离线 / 安全 / 打磨 ==================== */
     goTab('today'); await tick();
     const ckRow = q1('#view-today .lrow[data-act="toggle"]');

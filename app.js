@@ -11,6 +11,8 @@ const dayKey = d => { const x = new Date(d); return x.getFullYear() + '-' + pad(
 const parseDay = s => { const a = String(s).split('-').map(Number); return new Date(a[0], a[1] - 1, a[2]); };
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const TODAY = () => dayKey(new Date());
+/* 书名归一化：与 DB 的 books_owner_title_key 唯一索引（lower(btrim(title))）保持一致 */
+const normTitle = s => String(s == null ? '' : s).trim().toLowerCase();
 const WK = ['日', '一', '二', '三', '四', '五', '六'];
 const num = (v, d) => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? null : Number(v);
 const fmt1 = v => (v === null ? '—' : (Math.round(v * 10) / 10).toFixed(1));
@@ -101,6 +103,14 @@ function installManifest() {
    注册 URL 带 sharecode 才能通过发布站点的访问码校验；SW 自己从 self.location 读码。 */
 function installSW() {
   if (!('serviceWorker' in navigator) || location.protocol !== 'https:') return;
+  /* 导航改成缓存优先后，新版本靠 SW 在 activate 时通知一次；这里只提示，不自动刷新，
+     避免打断正在填的表单（用户下拉刷新即可应用）。 */
+  try {
+    navigator.serviceWorker.addEventListener('message', function (ev) {
+      const d = ev && ev.data;
+      if (d && d.type === 'lb-updated') toast('已更新到新版本，下拉刷新即可应用');
+    });
+  } catch (e) {}
   try {
     const u = new URL('sw.js', location.href);
     const sc = sharecode();
@@ -623,11 +633,22 @@ async function removeHabit(id) {
 }
 
 async function saveBook(payload) {
-  const rows = await insertRows('books', payload);
-  if (!rows.length) throw new Error('未能添加书籍');
-  S.books.unshift(rows[0]);
-  render();
-  return rows[0];
+  try {
+    const rows = await insertRows('books', payload);
+    if (!rows.length) throw new Error('未能添加书籍');
+    S.books.unshift(rows[0]);
+    render();
+    return rows[0];
+  } catch (e) {
+    /* DB 侧有 (owner_id, external_id) 与 (owner_id, lower(title)) 两条唯一索引：
+       并发或旧数据重名时会撞 23505，翻译成人话而不是把 SQL 错误抛给用户 */
+    if (/duplicate key|unique constraint|23505/i.test(String((e && e.message) || ''))) {
+      const dup = new Error('这本已经在书架里了');
+      dup.duplicateBook = true;
+      throw dup;
+    }
+    throw e;
+  }
 }
 /* 软删除：书籍与它的划线共用一个时间戳，恢复时能精确还原这一批 */
 async function removeBook(id) {
@@ -2311,11 +2332,16 @@ async function submitManualBook() {
   const t = ($('#mb-title') && $('#mb-title').value || '').trim();
   if (!t) { toast('请填写书名'); return; }
   const a = ($('#mb-author') && $('#mb-author').value || '').trim();
+  if (activeBooks().some(b => normTitle(b.title) === normTitle(t))) {
+    toast('这本已经在书架里了'); return;
+  }
   try {
     await saveBook({ title: t, author: a || null, status: 'reading', progress: 0, source: 'manual' });
     draftClear('book');
     closeSheet(); toast('已添加');
-  } catch (e) { toast('添加失败：' + (e.message || '网络异常')); }
+  } catch (e) {
+    toast(e.duplicateBook ? '这本已经在书架里了' : '添加失败：' + (e.message || '网络异常'));
+  }
 }
 
 /* ==================== 学习计划 ==================== */
@@ -2369,7 +2395,7 @@ async function doImport() {
   const parsed = window.Weread ? Weread.parse(raw) : { title: '', author: '', notes: [] };
   if (!parsed.notes.length) { toast('没有解析到划线内容'); return; }
   try {
-    let book = parsed.title ? activeBooks().find(b => b.title === parsed.title) : null;
+    let book = parsed.title ? activeBooks().find(b => normTitle(b.title) === normTitle(parsed.title)) : null;
     if (!book) {
       book = await saveBook({
         title: parsed.title || '未命名书籍',
@@ -2456,7 +2482,7 @@ async function applyShelf(list) {
   for (const b of list) {
     const hit = activeBooks().find(x =>
       (b.external_id && x.external_id && String(x.external_id) === String(b.external_id)) ||
-      x.title === b.title);
+      normTitle(x.title) === normTitle(b.title));
     if (hit) {
       const patch = { source: 'weread' };
       if (b.author && !hit.author) patch.author = b.author;
@@ -2464,11 +2490,16 @@ async function applyShelf(list) {
       if (b.status !== hit.status) { patch.status = b.status; patch.progress = b.progress; }
       if (Object.keys(patch).length > 1) { await patchBook(hit.id, patch); updated++; }
     } else {
-      await saveBook({
-        title: b.title, author: b.author, status: b.status,
-        progress: b.progress, source: 'weread', external_id: b.external_id
-      });
-      added++;
+      try {
+        await saveBook({
+          title: b.title, author: b.author, status: b.status,
+          progress: b.progress, source: 'weread', external_id: b.external_id
+        });
+        added++;
+      } catch (e) {
+        /* 抓到本地缓存里还没有、但库里已存在的同名书：不算失败 */
+        if (e.duplicateBook) updated++; else throw e;
+      }
     }
   }
   const at = new Date().toISOString();

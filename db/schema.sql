@@ -76,6 +76,17 @@ create table if not exists public.books (
   created_at    timestamptz not null default now(),
   deleted_at    timestamptz
 );
+-- 取值只能落在这两个状态、进度只能在 0–100（用 ALTER 而非内联，已建好的库也能补齐）
+alter table public.books drop constraint if exists books_status_check,
+  add constraint books_status_check check (status in ('reading', 'done'));
+alter table public.books drop constraint if exists books_progress_check,
+  add constraint books_progress_check check (progress between 0 and 100);
+-- 书架去重：同一账号下同一本书（external_id 或书名）只能有一条未删记录。
+-- 前端也有去重，但那只在单次操作内有效，多端并发时靠这两条唯一索引兜底。
+create unique index if not exists books_owner_ext_key
+  on public.books (owner_id, external_id) where external_id is not null and deleted_at is null;
+create unique index if not exists books_owner_title_key
+  on public.books (owner_id, lower(btrim(title))) where deleted_at is null;
 
 create table if not exists public.notes (
   id            bigint generated always as identity primary key,

@@ -57,7 +57,9 @@ def main():
     # 依赖的唯一约束/索引
     for name in ['checkins_owner_id_habit_id_day_key', 'health_daily_owner_id_day_key',
                  'activities_owner_id_external_id_key', 'notes_dedupe_idx',
-                 'study_logs_dedupe_idx', 'app_kv_owner_id_k_key']:
+                 'study_logs_dedupe_idx', 'app_kv_owner_id_k_key',
+                 'books_owner_ext_key', 'books_owner_title_key',
+                 'books_status_check', 'books_progress_check']:
         if name not in schema:
             problems.append('schema.sql 缺少唯一约束/索引 %s' % name)
 
