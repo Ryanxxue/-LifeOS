@@ -1305,15 +1305,16 @@ function patchCheckinUI(habitId, day, actName) {
     const chk = row.querySelector('.chk');
     if (chk) {
       chk.classList.toggle('on', on);
-      chk.innerHTML = on ? icon('check', row.classList.contains('chip') ? 11 : 15) : '';
+      chk.innerHTML = on ? icon('check', 15) : '';
     }
-    /* 横排项的内联色要跟着切：未完成淡底彩图标、完成实色白图标 */
-    const licon = row.querySelector('.licon');
-    if (licon && row.classList.contains('chip')) {
+    /* 横排项的外框是勾选框：未完成＝习惯色半透明描边 + 透明底，完成＝实色 + 白勾 */
+    const hbox = row.querySelector('.hbox');
+    if (hbox) {
       const hb = S.habits.find(x => String(x.id) === String(habitId));
       const col = (hb && hb.color) || '#0A84FF';
-      licon.style.background = on ? col : tint(col, 0.16);
-      licon.style.color = on ? '#fff' : col;
+      hbox.style.borderColor = on ? col : tint(col, 0.5);
+      hbox.style.background = on ? col : 'transparent';
+      hbox.style.color = on ? '#fff' : 'transparent';
     }
     if (row.hasAttribute('aria-checked')) {
       row.setAttribute('aria-checked', on ? 'true' : 'false');
@@ -1470,11 +1471,24 @@ async function syncCorosDaily(opts) {
 
 /* ==================== 今日 ==================== */
 
+/* 一行身体数据是否「够格」当今天的值：只认这三格里至少一个真值。
+   COROS 每天都会写 step / stress / training_load，若把这种只有步数的行当成
+   「今天已有数据」，三格就全变「—」、回落提示也不再出现——用户看到的就是
+   「同步完了还是没更新」。所以必须按核心字段判断，而不是「行存在」。 */
+function hasCoreHealth(h) {
+  return !!h && ['sleep_total', 'hrv', 'resting_hr'].some(f => {
+    const v = h[f];
+    return v !== null && v !== undefined && v !== '';
+  });
+}
+function corosStatus() {
+  try { return (window.Coros && Coros.status && Coros.status()) || null; } catch (e) { return null; }
+}
 function healthCells(day) {
   const own = S.health[day];
-  /* 今天还没有数据时回落到最近一天（7 天内）：状态栏不能一直空着。
+  /* 今天还没有核心数据时回落到最近一天（7 天内）：状态栏不能一直空着。
      但必须在下方的提示行里标注数据日期，不能拿昨天的数值冒充今天。 */
-  const srcDay = own ? day : (day === TODAY() ? latestHealthDay(7) : null);
+  const srcDay = hasCoreHealth(own) ? day : latestHealthDay(7);
   const h = (srcDay && S.health[srcDay]) || {};
   /* 只留三格：训练负荷对日常决策帮助最小（且 COROS 常给空值），
      移除后网格改为 3 列；它在趋势页的相关性与详情弹层里仍可查看。 */
@@ -1499,6 +1513,37 @@ function healthCells(day) {
       '<div class="v">' + c.v + (c.u && c.v !== '—' ? '<span class="u">' + c.u + '</span>' : '') + '</div>' + dh + '</div>';
   }).join('') + '</div>' + (S.sparkField ? sparkCardHTML(S.sparkField) : '');
 }
+
+/* 今日状态下面的说明行。三格回落时最容易被误解成「同步没生效」，所以这里要说清
+   三件事：同步到底跑没跑（几点）、COROS 今天有什么、上面显示的是哪一天。 */
+function healthHintHTML(day, own) {
+  if (hasCoreHealth(own)) return '';
+  const srcDay = latestHealthDay(7);
+  const md = srcDay ? (Number(srcDay.slice(5, 7)) + '月' + Number(srcDay.slice(8, 10)) + '日') : '';
+  const st = corosStatus() || {};
+  let syncedToday = false, hhmm = '';
+  if (st.lastSyncAt) {
+    const t = new Date(st.lastSyncAt);
+    if (!isNaN(t.getTime()) && dayKey(t) === day) {
+      syncedToday = true;
+      hhmm = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+    }
+  }
+  /* 只有步数/压力也说明同步成功过——这比一句「还没同步」有用得多 */
+  const bits = [];
+  if (own && own.steps != null) bits.push('步数 ' + Math.round(own.steps));
+  if (own && own.stress != null) bits.push('压力 ' + Math.round(own.stress));
+  let main;
+  if (bits.length) main = '今天只有' + bits.join('、') + (syncedToday ? ' · 已同步 ' + hhmm : '');
+  else if (syncedToday) main = '已同步 ' + hhmm + '，但 COROS 今天没有睡眠/HRV 记录';
+  else main = '今天还没同步';
+  const sub = srcDay ? '上面是 ' + md + ' 的数据' : '暂时还没有身体数据';
+  return '<div class="gfoot sync-note">' +
+    '<span class="sn-main">' + main + '</span>' +
+    '<span class="sn-sub">' + sub + '</span>' +
+    '<button class="pill" data-act="corosSync" aria-label="' + (syncedToday ? '重新同步' : '立即同步') + ' COROS 身体数据">' +
+    (syncedToday ? '重新同步' : '立即同步') + '</button></div>';
+}
 function sparkCardHTML(field) {
   const f = BASE_FIELDS.find(x => x.f === field) || BASE_FIELDS[0];
   const vals = seriesBack(14, d => { const h = S.health[d]; return h ? num(h[field]) : null; });
@@ -1518,9 +1563,12 @@ function tint(hex, alpha) {
   return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
 }
 
-/* 横排紧凑打卡项：一个圆 + 名称，一屏能放下 5–6 项。
-   刻意沿用 .lrow / .licon / .chk / .lrow-t 这套类名——patchCheckinUI 靠它们做
-   局部更新（打卡后只改这一格的 class 与内联色，不重绘整页，滚动位置才不丢）。 */
+/* 横排打卡项：一个勾选框 + 名称，一屏能放下 4–6 项。
+   以前每项画的是习惯图标，但用户在真实数据里所有习惯图标都一样（大多没设图标），
+   一排看起来完全重复，也看不出「有没有打过卡」；改成打勾框后，勾本身就是状态，
+   边框用习惯色只为区分相邻项，不再承担识别职责。
+   类名沿用 .lrow / .chk / .lrow-t ——patchCheckinUI 靠它们做局部更新
+   （打卡后只改这一格的内联色与 class，不重绘整页，滚动位置才不丢）。 */
 function habitChip(h, day, actName) {
   const on = isDone(h.id, day);
   const pend = pendingOf(h.id, day) !== undefined;
@@ -1529,9 +1577,9 @@ function habitChip(h, day, actName) {
     '" aria-label="' + esc(h.name + '，' + (on ? '已完成' : '未完成')) + '"';
   return '<div class="lrow chip' + (on ? ' done' : '') + (pend ? ' pending' : '') +
     '" data-act="' + actName + '" data-id="' + h.id + '" data-day="' + day + '"' + a11y + '>' +
-    '<div class="licon" style="background:' + esc(on ? col : tint(col, 0.16)) +
-    ';color:' + esc(on ? '#fff' : col) + '">' + icon(h.icon || 'circle', 20) +
-    '<div class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 11) : '') + '</div></div>' +
+    '<div class="hbox" style="border-color:' + esc(on ? col : tint(col, 0.5)) +
+    ';background:' + esc(on ? col : 'transparent') + ';color:' + esc(on ? '#fff' : 'transparent') + '">' +
+    '<span class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 15) : '') + '</span></div>' +
     '<div class="lbody"><div class="lrow-t">' + esc(h.name) + '</div>' +
     '<div class="lrow-sub">' + esc(h.target || '每天') + (pend ? ' · 待同步' : '') + '</div></div>' +
     '</div>';
@@ -1570,13 +1618,7 @@ function renderToday() {
   /* 今日状态（身体数据）在最上：它每天只有一个值，先看一眼就知道今天什么状态 */
   html += '<div class="gtitle"><span>今日状态</span></div>';
   html += healthCells(day);
-  if (!h) {
-    const last = latestHealthDay(7);
-    const md = last ? (Number(last.slice(5, 7)) + '月' + Number(last.slice(8, 10)) + '日') : '';
-    html += '<div class="gfoot" style="display:flex;align-items:center;justify-content:space-between">' +
-      '<span>' + (last ? '今天还没同步 · 上面是 ' + md + ' 的数据' : '身体数据未同步') + '</span>' +
-      '<button class="pill" data-act="corosSync" style="font-size:12px;padding:4px 10px">立即同步</button></div>';
-  }
+  html += healthHintHTML(day, h);
 
   /* 打卡是核心动作，紧跟今日状态 */
   html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +

@@ -774,7 +774,7 @@ function status() {
   // 令牌过期但仍有 refresh_token 时不算「已连接」到可用状态以外：ensureFresh 会自动续期
   const usable = !!(c && c.access_token && (c.refresh_token || Date.now() < (c.expires_at || 0)));
   const w = (c && c.last_warnings) || [];
-  return { connected: usable, lastSync: last, warnCount: w.length };
+  return { connected: usable, lastSync: last, lastSyncAt: (c && c.last_sync) || null, warnCount: w.length };
 }
 function warnings() { return (cache && cache.last_warnings) || []; }
 

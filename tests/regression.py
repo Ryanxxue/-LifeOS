@@ -851,14 +851,16 @@ TEST = r'''
        cw.length >= 2 && Math.max.apply(null, cw) - Math.min.apply(null, cw) <= 2,
        'widths=' + cw.join(','));
     const chip0 = chips[0];
-    const colBefore = chip0 ? chip0.querySelector('.licon').style.background : '';
+    const boxBefore = chip0 ? chip0.querySelector('.hbox').style.background : '';
     if (chip0) { chip0.click(); await sleep(150); }
     const chipAfter = q1('#view-today .habit-strip .lrow.chip');
-    /* 圆点状态要能即时翻转：完成＝实色＋勾，未完成＝淡色无勾，与 .done 严格对应 */
-    ok('今日打卡：点一下圆点即时翻转（实色+勾 ↔ 淡色无勾），无需刷新',
-       !!chipAfter && chipAfter.querySelector('.licon').style.background !== colBefore &&
-       (!!chipAfter.querySelector('.chk.on')) === chipAfter.classList.contains('done'),
-       'before=' + colBefore + ' after=' + (chipAfter ? chipAfter.querySelector('.licon').style.background : 'null'));
+    /* 勾选框状态要能即时翻转：完成＝实色底 + 白勾，未完成＝透明底 + 描边，与 .done 严格对应 */
+    ok('今日打卡：点一下勾选框即时翻转（实色+白勾 ↔ 空心描边），无需刷新',
+       !!chipAfter && chipAfter.querySelector('.hbox').style.background !== boxBefore &&
+       (!!chipAfter.querySelector('.chk.on')) === chipAfter.classList.contains('done') &&
+       (!chipAfter.classList.contains('done') || !!chipAfter.querySelector('.hbox .chk svg')) &&
+       !chipAfter.querySelector('.licon'),
+       'before=' + boxBefore + ' after=' + (chipAfter ? chipAfter.querySelector('.hbox').style.background : 'null'));
     if (chipAfter) { chipAfter.click(); await sleep(150); }
     q1('#view-today [data-act="edittoggle"]').click(); await tick();
     ok('今日打卡：编辑态回到纵向列表并露出删除按钮',
@@ -880,7 +882,26 @@ TEST = r'''
        /月\s*\d+\s*日/.test(fbText) &&
        q1('#view-today [data-act="corosSync"]').textContent.indexOf('立即同步') >= 0,
        'cell=' + (fbCell ? fbCell.textContent : 'null') + ' | ' + fbText.slice(0, 120));
-    if (savedTodayHealth) S.health[dayAt(0)] = savedTodayHealth;
+
+    /* 线上真实故障：COROS 会给「只有步数/压力」的那天也落一行，三格全空。
+       以前把这种行当成「今天有数据」→ 三格全「—」且回落提示消失，
+       用户看到的就是「同步完了还是没更新」。 */
+    const hadCorosObj = Object.prototype.hasOwnProperty.call(window, 'Coros');
+    const prevCorosObj = window.Coros;
+    S.health[dayAt(0)] = { day: dayAt(0), steps: 8405, stress: 67, training_load: 25 };
+    window.Coros = { status: function () { return { connected: true, lastSyncAt: new Date().toISOString(), lastSync: 'now', warnCount: 0 }; } };
+    window.LifeApp.render(); await tick();
+    const nullCell = q1('#view-today .health .hcell .v');
+    const nullText = q1('#view-today').textContent.replace(/\s+/g, ' ');
+    ok('今日：当天只有步数/压力时仍回落（不把三格刷成「—」），并说明已同步',
+       !!q1('#view-today .health[data-day]') &&
+       q1('#view-today .health').getAttribute('data-day') !== dayAt(0) &&
+       !!nullCell && !/^—/.test(nullCell.textContent.trim()) &&
+       /步数/.test(nullText) && /已同步/.test(nullText) && /上面是/.test(nullText) &&
+       q1('#view-today [data-act="corosSync"]').textContent.indexOf('重新同步') >= 0,
+       'cell=' + (nullCell ? nullCell.textContent : 'null') + ' | ' + nullText.slice(0, 140));
+    if (hadCorosObj) window.Coros = prevCorosObj; else { try { delete window.Coros; } catch (e) { window.Coros = prevCorosObj; } }
+    if (savedTodayHealth) S.health[dayAt(0)] = savedTodayHealth; else delete S.health[dayAt(0)];
     window.LifeApp.render();
 
     const runSvg = window.LifeApp.sportIcon({ name: 'Indoor Run' }, 14);

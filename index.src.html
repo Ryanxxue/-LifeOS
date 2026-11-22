@@ -103,6 +103,13 @@ svg{display:block}
 .gtitle{font-size:12.5px;color:var(--text-3);margin:20px 4px 8px;font-weight:500;letter-spacing:.02em}
 .gnum{font-size:12px;color:var(--text-3);font-weight:400;margin-left:7px;letter-spacing:0}
 .gfoot{font-size:12px;color:var(--text-3);margin:6px 4px 0;line-height:1.45}
+/* 今日状态下方：同步状态 + 回落日期 + 重新同步。允许换行——手机上一行放不下就折成
+   两行（「今天只有步数…」/「上面是 11月20日 的数据 · 重新同步」），不会挤成一条 */
+.gfoot.sync-note{display:flex;flex-wrap:wrap;align-items:center;gap:3px 10px}
+/* 主句比回落日期稍亮一档，两段并排时不靠标点也能分出层次 */
+.gfoot.sync-note .sn-main{color:var(--text-2)}
+.gfoot.sync-note .sn-sub{color:var(--text-3)}
+.gfoot.sync-note .pill{margin-left:auto;flex:none;font-size:12px;padding:4px 10px;line-height:1.3}
 
 /* ---------- 今日 ---------- */
 .ring{position:relative;width:78px;height:78px;flex:none}
@@ -140,12 +147,12 @@ svg{display:block}
 .addrow{display:flex;align-items:center;gap:10px;padding:12px 14px;color:var(--blue);font-size:15px;cursor:pointer;background:var(--card)}
 .addrow:active{background:var(--fill)}
 
-/* ---------- 今日打卡：横排紧凑条 ----------
-   纵向列表是「一项 57px」，5 项就 280px；横排后固定约 82px，习惯多了横向滑动。
-   圆点未完成＝习惯色淡底 + 彩色图标，完成＝实色 + 右下角绿色勾（.chk 用绝对定位
-   贴在圆点内，patchCheckinUI 仍能用同一个选择器做局部更新）。
-   44 而不是 46：44+5+一行 11.5px 标签 ≈ 65，配上 10/8 内边距正好 82，
-   与上方状态条（70 出头）和下方回顾条（44）形成递减的节奏。 */
+/* ---------- 今日打卡：横排打勾框 ----------
+   纵向列表是「一项 57px」，5 项就 280px；横排后固定约 69px，习惯多了横向滑动。
+   每项是一个勾选框（.hbox）：未完成＝习惯色半透明描边、透明底；完成＝实色底 + 白勾。
+   不再画习惯图标——真实数据里图标大多相同，一排重复反而看不出打卡状态。
+   30+5+一行 11.5px 标签 ≈ 50，配 10/8 内边距整卡约 69，与状态条 74、回顾条 44
+   形成递减节奏。 */
 .stripcard{padding:0}
 .habit-strip{display:flex;gap:6px;overflow-x:auto;padding:10px 10px 8px;
   scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
@@ -157,28 +164,30 @@ svg{display:block}
 /* flex:1 1 0 + min-width：少几项时按「剩余空间均分」把整条铺满（不再在右端留空白），
    项多了缩到 62 就停、自然横向滚动。basis 必须是 0 而不是 auto——auto 会让长习惯名
    把那一格撑宽（165/165/189），一排格子就不齐了。 */
-.lrow.chip{flex:1 1 0;min-width:62px;flex-direction:column;align-items:center;gap:5px;
+.lrow.chip{flex:1 1 0;min-width:62px;flex-direction:column;align-items:center;gap:6px;
   padding:0 4px 1px;border-bottom:0;background:transparent;border-radius:10px;
   scroll-snap-align:start}
 .card .lrow.chip:not(:last-child)::after{display:none}
 html[data-glass="on"] .lrow.chip:active{background-color:transparent}
-.lrow.chip .licon{width:44px;height:44px;border-radius:50%;position:relative;
-  transition:background .18s ease,color .18s ease,transform .22s cubic-bezier(.32,.72,0,1)}
-.lrow.chip:active .licon{transform:scale(.92)}
+/* 勾选框本体：描边与底色都由 JS 内联（跟习惯色），这里只管形状与动效 */
+.hbox{width:30px;height:30px;border-radius:9px;border:1.6px solid var(--fill-3);flex:none;
+  display:grid;place-items:center;
+  transition:background .18s ease,border-color .18s ease,color .18s ease,transform .22s cubic-bezier(.32,.72,0,1)}
+.lrow.chip:active .hbox{transform:scale(.92)}
 .lrow.chip .lbody{width:100%;text-align:center}
 .lrow.chip .lrow-t{font-size:11.5px;line-height:1.25;color:var(--text)}
 .lrow.chip .lrow-sub{display:none}
-.lrow.chip .chk{position:absolute;right:-3px;bottom:-3px;width:18px;height:18px;
-  display:grid;place-items:center;background:transparent;border:0;
-  opacity:0;transform:scale(.4);transition:opacity .16s,transform .2s cubic-bezier(.32,.72,0,1)}
-.lrow.chip .chk.on{opacity:1;transform:scale(1);background:var(--green);
-  box-shadow:0 0 0 2px var(--card),0 1px 4px rgba(0,0,0,.28)}
-.lrow.chip.pending .licon{box-shadow:0 0 0 2px var(--orange)}
-/* 新建格与习惯格同规则伸缩：否则 3 项时前三格被均分撑到 111，「新建」还卡在 62，
+/* .chk 在纵向列表里是右侧的绿圆，在横排里退化成勾本身：不要圆、不要边、不要阴影 */
+.lrow.chip .chk{position:static;width:auto;height:auto;border:0;background:transparent;
+  box-shadow:none;opacity:1;transform:none;display:grid;place-items:center;
+  color:#fff;font-size:0;transition:none}
+.lrow.chip .chk.on{background:transparent;box-shadow:none}
+.lrow.chip.pending .hbox{box-shadow:0 0 0 2px var(--orange)}
+/* 新建格与习惯格同规则伸缩：否则 3 项时前三格被均分撑宽，「新建」还卡在 62，
    右端会突然收窄，一眼看出没对齐 */
-.hchip-add{flex:1 0 auto;min-width:62px;display:flex;flex-direction:column;align-items:center;gap:5px;
+.hchip-add{flex:1 0 auto;min-width:62px;display:flex;flex-direction:column;align-items:center;gap:6px;
   padding:0 4px 1px;cursor:pointer;color:var(--text-3);border-radius:10px}
-.hchip-add .ha{width:44px;height:44px;border-radius:50%;border:1.5px dashed var(--fill-3);
+.hchip-add .ha{width:30px;height:30px;border-radius:9px;border:1.5px dashed var(--fill-3);
   display:grid;place-items:center;transition:transform .2s,color .2s,border-color .2s}
 .hchip-add:active .ha{transform:scale(.92);border-color:var(--blue);color:var(--blue)}
 .hchip-add .ha-t{font-size:11.5px;line-height:1.25}
