@@ -671,13 +671,13 @@ TEST = r'''
     ok('P1-8b：今日页不再有洞察卡，也不再有训练负荷（含四格里的那一格）',
        !q1('#view-today .insight') && !q1('#view-today #week-review .insight') &&
        !/训练负荷/.test(q1('#view-today').textContent));
-    const beforeHero = q1('#today-hero .val b') ? q1('#today-hero .val b').textContent : '';
+    const beforeProg = q1('#habit-prog') ? q1('#habit-prog').textContent : '';
     const habitRow = q1('#view-today .lrow[data-act="toggle"]');
     if (habitRow) habitRow.click(); await tick();
-    ok('P0-3：打卡局部更新并带勾选动画',
-       !!q1('#view-today .lrow.pop') && !!q1('#today-hero .val b') &&
-       q1('#today-hero .val b').textContent !== beforeHero,
-       beforeHero + ' -> ' + (q1('#today-hero .val b') ? q1('#today-hero .val b').textContent : ''));
+    ok('P0-3：打卡局部更新并带勾选动画，完成度小字同步',
+       !!q1('#view-today .lrow.pop') && !!q1('#habit-prog') &&
+       q1('#habit-prog').textContent !== beforeProg,
+       beforeProg + ' -> ' + (q1('#habit-prog') ? q1('#habit-prog').textContent : ''));
 
     /* --- P0-3 撤销 --- */
     goTab('library'); await tick();
@@ -837,6 +837,12 @@ TEST = r'''
     /* --- 今日打卡：横排紧凑条 --- */
     const chips = document.querySelectorAll('#view-today .habit-strip .lrow.chip');
     const strip = q1('#view-today .habit-strip');
+    ok('今日页：首屏不再有完成度大卡片，第一块是今日状态（身体数据）',
+       !q1('#view-today .hero') && !q1('#today-hero') &&
+       q1('#view-today .health').getBoundingClientRect().top <
+       q1('#view-today .habit-strip').getBoundingClientRect().top);
+    ok('今日页：完成度收进打卡标题右侧的小字',
+       !!q1('#habit-prog') && /^\d+\/\d+$/.test(q1('#habit-prog').textContent.trim()));
     ok('今日打卡：正常态是一行横排圆点（含新建入口），不再是纵向列表',
        chips.length >= 1 && !!q1('#view-today .hchip-add') && !!q1('#view-today .stripcard') &&
        strip.getBoundingClientRect().height < 120);
@@ -948,9 +954,12 @@ TEST = r'''
       if (ckRow2) { ckRow2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await tick(); }
     }
     const todayTxt = q1('#view-today').textContent;
-    ok('交互：打卡列表排在健康四格之前',
-       todayTxt.indexOf('今日打卡') > 0 && todayTxt.indexOf('今日打卡') < todayTxt.indexOf('睡眠'),
-       todayTxt.indexOf('今日打卡') + '/' + todayTxt.indexOf('睡眠'));
+    ok('交互：今日状态（身体数据）在打卡之前，完成度卡片已移除',
+       todayTxt.indexOf('今日状态') > 0 &&
+       todayTxt.indexOf('今日状态') < todayTxt.indexOf('睡眠') &&
+       todayTxt.indexOf('睡眠') < todayTxt.indexOf('今日打卡') &&
+       todayTxt.indexOf('今天还没开始') < 0,
+       todayTxt.indexOf('今日状态') + '/' + todayTxt.indexOf('睡眠') + '/' + todayTxt.indexOf('今日打卡'));
 
     goTab('calendar'); await tick();
     const prev = q1('#view-calendar [data-act="calprev"]');

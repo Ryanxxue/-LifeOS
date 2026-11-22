@@ -1113,16 +1113,6 @@ function renderChrome() {
   }
 }
 
-function ringHTML(pct, done, total) {
-  const r = 32, c = 2 * Math.PI * r;
-  const off = c * (1 - Math.max(0, Math.min(1, pct)));
-  const col = pct >= 1 ? 'var(--green)' : 'var(--blue)';
-  return '<div class="ring"><svg width="78" height="78" viewBox="0 0 78 78">' +
-    '<circle cx="39" cy="39" r="' + r + '" fill="none" stroke="var(--fill)" stroke-width="7"/>' +
-    '<circle cx="39" cy="39" r="' + r + '" fill="none" stroke="' + col + '" stroke-width="7" stroke-linecap="round" ' +
-    'stroke-dasharray="' + c.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" style="transition:stroke-dashoffset .35s"/>' +
-    '</svg><div class="val"><b>' + done + '</b><i>/ ' + total + '</i></div></div>';
-}
 
 /* ==================== 本轮优化：个人基线 / 洞察 / 运动类型 / 快速操作 ==================== */
 const SPORT_KIND = [
@@ -1339,13 +1329,9 @@ function patchCheckinUI(habitId, day, actName) {
     }
     row.classList.remove('pop'); void row.offsetWidth; row.classList.add('pop');
   }
-  const hero = $('#today-hero');
-  if (hero && day === TODAY()) {
-    const total = dayEntries(day), done = doneCount(day), pct = total ? done / total : 0;
-    const w = heroWords(pct);
-    hero.innerHTML = ringHTML(pct, done, total) +
-      '<div class="hero-txt"><div class="t">' + w[0] + '</div><div class="s">' + w[1] + '</div></div>';
-  }
+  /* 完成度已收进打卡标题：打卡后只改这个小字，不再重绘整块 */
+  const prog = $('#habit-prog');
+  if (prog && day === TODAY()) prog.textContent = doneCount(day) + '/' + dayEntries(day);
   const cp = $('#cal-progress');
   if (cp) cp.textContent = '完成 ' + doneCount(day) + '/' + dayEntries(day);
 }
@@ -1483,13 +1469,6 @@ async function syncCorosDaily(opts) {
 }
 
 /* ==================== 今日 ==================== */
-function heroWords(pct) {
-  if (pct >= 1) return ['全部完成', '今天可以安心收工。'];
-  if (pct >= 0.7) return ['只剩几项', '保持这个节奏。'];
-  if (pct >= 0.4) return ['过半了', '节奏已经起来了。'];
-  if (pct > 0) return ['已启动', '先完成一项，就有一项。'];
-  return ['今天还没开始', '点一下任意一项即可开始。'];
-}
 
 function healthCells(day) {
   const own = S.health[day];
@@ -1578,8 +1557,6 @@ function renderToday() {
   const day = TODAY();
   const total = dayEntries(day);
   const done = doneCount(day);
-  const pct = total ? done / total : 0;
-  const w = heroWords(pct);
   const d = parseDay(day);
   const reading = activeBooks().filter(b => b.status === 'reading').slice(0, 6);
   const h = S.health[day];
@@ -1587,12 +1564,23 @@ function renderToday() {
   let html = '<div class="head"><div class="date">' + (d.getMonth() + 1) + '月' + d.getDate() + '日 周' + WK[d.getDay()] + '</div>' +
     '<h2>今日</h2></div>';
 
-  html += '<div class="hero" id="today-hero">' + ringHTML(pct, done, total) +
-    '<div class="hero-txt"><div class="t">' + w[0] + '</div><div class="s">' + w[1] + '</div></div></div>';
+  /* 首屏不再放整块完成度卡片：圆环 + 两句话的「今天还没开始 / 已启动」
+     占掉近 110px 却只表达一个比例，完成度收进打卡标题右侧的小字。 */
 
-  /* 核心动作优先：打卡紧跟完成度，健康与周回顾下沉为次要信息 */
+  /* 今日状态（身体数据）在最上：它每天只有一个值，先看一眼就知道今天什么状态 */
+  html += '<div class="gtitle"><span>今日状态</span></div>';
+  html += healthCells(day);
+  if (!h) {
+    const last = latestHealthDay(7);
+    const md = last ? (Number(last.slice(5, 7)) + '月' + Number(last.slice(8, 10)) + '日') : '';
+    html += '<div class="gfoot" style="display:flex;align-items:center;justify-content:space-between">' +
+      '<span>' + (last ? '今天还没同步 · 上面是 ' + md + ' 的数据' : '身体数据未同步') + '</span>' +
+      '<button class="pill" data-act="corosSync" style="font-size:12px;padding:4px 10px">立即同步</button></div>';
+  }
+
+  /* 打卡是核心动作，紧跟今日状态 */
   html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
-    '<span>今日打卡</span>' +
+    '<span>今日打卡' + (total ? '<span class="gnum" id="habit-prog">' + done + '/' + total + '</span>' : '') + '</span>' +
     (total ? '<button style="color:var(--blue);font-size:13.5px" data-act="edittoggle">' + (S.editing ? '完成' : '编辑') + '</button>' : '') +
     '</div>';
 
@@ -1609,18 +1597,6 @@ function renderToday() {
       '<div class="hchip-add" data-act="newhabit" role="button" tabindex="0" aria-label="新建打卡项">' +
         '<div class="ha">' + icon('plus', 19) + '</div><div class="ha-t">新建</div></div>' +
       '</div></div>';
-  }
-
-  /* 洞察卡已移除：一句话结论容易被当成「健康建议」误读，且它会随基线漂移
-     反复挑一条指标放大，信息价值低于误解成本。状态改由下面的三格 + 基线偏移承担。 */
-
-  html += healthCells(day);
-  if (!h) {
-    const last = latestHealthDay(7);
-    const md = last ? (Number(last.slice(5, 7)) + '月' + Number(last.slice(8, 10)) + '日') : '';
-    html += '<div class="gfoot" style="display:flex;align-items:center;justify-content:space-between">' +
-      '<span>' + (last ? '今天还没同步 · 上面是 ' + md + ' 的数据' : '身体数据未同步') + '</span>' +
-      '<button class="pill" data-act="corosSync" style="font-size:12px;padding:4px 10px">立即同步</button></div>';
   }
 
   html += reviewHTML();
