@@ -1809,8 +1809,10 @@ function renderCalendar() {
   if (!dayEntries(S.selDay)) {
     html += '<div class="card"><div class="empty">这一天还没有打卡项</div></div>';
   } else {
-    html += '<div class="card">' +
-      habitsForDay(S.selDay).map(h => habitRow(h, S.selDay, false, 'daytoggle')).join('') + '</div>';
+    /* 与首页同一套胶囊（habitChip），只是容器换成 .hchip-list 换行铺开：
+       这一天有哪些卡、打没打，要一眼看全，不能靠横向滚动去翻。 */
+    html += '<div class="hchip-list">' +
+      habitsForDay(S.selDay).map(h => habitChip(h, S.selDay, 'daytoggle')).join('') + '</div>';
   }
 
   const acts = activitiesForDay(S.selDay);

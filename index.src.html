@@ -179,6 +179,11 @@ html[data-glass="on"] .hchip{background-color:var(--fill-2)}
   box-shadow:inset 0 0 0 1px var(--fill-3)}
 .hchip.add:active{color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue)}
 
+/* 日历日详情：同一套胶囊，但换行铺开、不做横向滚动——
+   那一页是「核对某一天打了哪些卡」，把项藏在横滑后面就没意义了；
+   首页是快速打卡，才用横滑把首屏压住。 */
+.hchip-list{display:flex;flex-wrap:wrap;gap:8px}
+
 /* 勾选框本体（胶囊 / 列表行 / 日历日详情共用）：描边与底色由 JS 按习惯色内联 */
 .hbox{width:30px;height:30px;border-radius:10px;border:1.6px solid var(--fill-3);flex:none;
   display:grid;place-items:center;
