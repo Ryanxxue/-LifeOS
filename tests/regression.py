@@ -838,11 +838,17 @@ TEST = r'''
     const savedTodayHealth = S.health[dayAt(0)];
     delete S.health[dayAt(0)];
     window.LifeApp.render(); await tick();
-    ok('今日：无当天身体数据时，四格下方可一键同步 COROS',
+    const fbCell = q1('#view-today .health .hcell .v');
+    const fbText = q1('#view-today').textContent.replace(/\s+/g, ' ');
+    ok('今日：无当天数据时三格回落到最近一天并标注日期，而不是全空',
        !q1('#view-today .insight') &&
-       !!q1('#view-today .health') &&
-       /身体数据未同步/.test(q1('#view-today').textContent) &&
-       q1('#view-today [data-act="corosSync"]').textContent.indexOf('立即同步') >= 0);
+       !!q1('#view-today .health[data-day]') &&
+       !!fbCell && !/^—/.test(fbCell.textContent.trim()) &&
+       q1('#view-today .health').getAttribute('data-day') !== dayAt(0) &&
+       /今天还没同步/.test(fbText) &&
+       /月\s*\d+\s*日/.test(fbText) &&
+       q1('#view-today [data-act="corosSync"]').textContent.indexOf('立即同步') >= 0,
+       'cell=' + (fbCell ? fbCell.textContent : 'null') + ' | ' + fbText.slice(0, 120));
     if (savedTodayHealth) S.health[dayAt(0)] = savedTodayHealth;
     window.LifeApp.render();
 
@@ -1132,6 +1138,28 @@ TEST = r'''
     ok('交互：回到顶部时工具条恢复透明（不留灰带）',
        !!q1('.lib-nav') && !q1('.lib-nav').classList.contains('stuck'));
     if (keepRaw) localStorage.setItem(SKEY, keepRaw); else localStorage.removeItem(SKEY);
+
+    /* --- 每日 COROS 同步：标记语义（0 天不能把当天锁死） --- */
+    const savedCoros = window.Coros;
+    const AUTO_KEY = 'lb.corosAutoDay';
+    try {
+      window.Coros = {
+        afterLogin: async function () {},
+        status: function () { return { connected: true }; },
+        sync: async function () { return { days: 0, activities: 0, warnings: [] }; }
+      };
+      localStorage.removeItem(AUTO_KEY);
+      const r0 = await window.LifeApp.syncCorosDaily({ silent: true, force: true });
+      ok('自动同步：0 天结果不写「今天已完成」，当天仍可再试（不再把空结果锁一整天）',
+         r0 && r0.ok === true && localStorage.getItem(AUTO_KEY) !== dayAt(0));
+      window.Coros.sync = async function () { return { days: 1, activities: 0, warnings: [] }; };
+      await window.LifeApp.syncCorosDaily({ silent: true, force: true });
+      ok('自动同步：确实拿到数据后才写当天标记，避免重复拉取',
+         localStorage.getItem(AUTO_KEY) === dayAt(0));
+    } finally {
+      window.Coros = savedCoros;
+      localStorage.removeItem(AUTO_KEY);
+    }
   } catch (e) {
     out.push('FAIL | 测试脚本异常 | ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]);
   }

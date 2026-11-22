@@ -1166,21 +1166,37 @@ function seriesBack(n, getter) {
   for (let i = n - 1; i >= 0; i--) out.push(getter(dayKey(addDays(new Date(), -i))));
   return out;
 }
-function baselineOf(field, win) {
+/* endDay 省略时以今天为准；传入具体日期用于「今天没数据、回落到最近一天」时
+   仍按那一天的前 7 天算基线，避免拿昨天的值去比今天的基线。 */
+function baselineOf(field, win, endDay) {
+  const base = endDay ? parseDay(endDay) : new Date();
   const vals = [];
   for (let i = 1; i <= win; i++) {
-    const h = S.health[dayKey(addDays(new Date(), -i))];
+    const h = S.health[dayKey(addDays(base, -i))];
     const v = h ? num(h[field]) : null;
     if (v !== null && isFinite(v)) vals.push(v);
   }
   if (vals.length < 3) return null;
   return { avg: vals.reduce((a, b) => a + b, 0) / vals.length, n: vals.length };
 }
-function fieldDelta(field) {
-  const b = baselineOf(field, 7), h = S.health[TODAY()];
+function fieldDeltaAt(field, day) {
+  const h = S.health[day];
   const v = h ? num(h[field]) : null;
-  if (!b || v === null) return null;
+  if (v === null) return null;
+  const b = baselineOf(field, 7, day);
+  if (!b) return null;
   return { cur: v, base: b.avg, delta: v - b.avg, rel: b.avg ? (v - b.avg) / b.avg : 0, n: b.n };
+}
+function fieldDelta(field) { return fieldDeltaAt(field, TODAY()); }
+/* 最近一个有身体数据的日期（只在往回 catch 天以内找，避免拿到半年前的值冒充） */
+function latestHealthDay(catchDays) {
+  const span = catchDays || 7;
+  for (let i = 0; i < span; i++) {
+    const k = dayKey(addDays(new Date(), -i));
+    const h = S.health[k];
+    if (h && [h.sleep_total, h.hrv, h.resting_hr].some(v => v !== null && v !== undefined)) return k;
+  }
+  return null;
 }
 function sparkSVG(vals, color) {
   const nn = vals.filter(v => v !== null && v !== undefined && isFinite(v));
@@ -1378,7 +1394,10 @@ async function runCorosSync() {
   toast('正在同步…');
   try {
     const res = await Coros.sync();
-    markCorosAutoDone();            // 手动同步过，今天就不必再自动跑一次
+    corosRetryAt = 0;
+    if (Number((res && res.days) || 0) > 0 || Number((res && res.activities) || 0) > 0) {
+      markCorosAutoDone();          // 手动同步拿到数据，今天就不必再自动跑一次
+    }
     try { await loadAll(); render(); }
     catch (e) { toast('同步完成，但刷新数据失败：' + ((e && e.message) || '')); return; }
     const w = (res && res.warnings) || [];
@@ -1397,6 +1416,7 @@ async function runCorosSync() {
    只在成功时写「今天已同步」标记：失败就留到下次打开重试，不会把当天锁死。 */
 const COROS_AUTO_KEY = 'lb.corosAutoDay';
 let corosAutoBusy = false;
+let corosRetryAt = 0;          // 0 天/失败后的退避时间，避免每 5 分钟重跑一轮 MCP
 function corosAutoDoneToday() {
   try { return localStorage.getItem(COROS_AUTO_KEY) === TODAY(); } catch (e) { return false; }
 }
@@ -1408,13 +1428,29 @@ async function syncCorosDaily(opts) {
   if (!window.Coros || !S.user || S.offline || navigator.onLine === false) return { skipped: true };
   if (corosAutoBusy) return { skipped: true };
   if (!o.force && corosAutoDoneToday()) return { skipped: true };
+  if (!o.force && Date.now() < corosRetryAt) return { skipped: true };
   let st;
-  try { st = Coros.status(); } catch (e) { return { skipped: true }; }
-  if (!st || !st.connected) return { skipped: true };
+  try {
+    /* 冷启动的关键时序：Coros.afterLogin() 读令牌是异步的（一次 app_kv 请求），
+       本函数若抢在它之前调 status()，会读到空 cache 判定「未连接」并静默跳过。
+       以前 enterApp 里 afterLogin 没有 await，正是「每天自动同步、今日却始终空着」
+       的根因：跳过时既不标记也不写诊断，所以连失败记录都查不到。 */
+    if (Coros.afterLogin) await Coros.afterLogin();
+    st = Coros.status();
+  } catch (e) { console.warn('[coros] 自动同步准备失败', e); return { skipped: true, why: 'auth' }; }
+  if (!st || !st.connected) {
+    console.warn('[coros] 自动同步跳过：COROS 未连接或令牌缺失');
+    return { skipped: true, why: 'not-connected' };
+  }
   corosAutoBusy = true;
   try {
     const res = await Coros.sync();
-    markCorosAutoDone();
+    const wroteDays = Number((res && res.days) || 0);
+    const wroteActs = Number((res && res.activities) || 0);
+    /* 只有真的拿到数据才算「今天已完成」：0 天时若也标记，当天就再也不会重试，
+       一旦 COROS 侧报告晚生成，今日格就空一整天。0 天改为 30 分钟后退避重试。 */
+    if (wroteDays > 0 || wroteActs > 0) markCorosAutoDone();
+    else corosRetryAt = Date.now() + 30 * 60 * 1000;
     /* 同步写入云端后必须重新拉一次，否则页面还停在同步前的内存快照 */
     try { await loadAll(); saveSnapshot(); render(); } catch (e) {}
     const w = (res && res.warnings) || [];
@@ -1426,7 +1462,9 @@ async function syncCorosDaily(opts) {
     return { ok: true, res: res };
   } catch (e) {
     noteWriteError('corosAutoSync', e);
-    if (!o.silent) toast('COROS 自动同步失败，稍后会自动重试');
+    /* 失败也退避 30 分钟：看门狗每 5 分钟一次，避免令牌失效时反复打 MCP 接口 */
+    corosRetryAt = Date.now() + 30 * 60 * 1000;
+    if (!o.silent) toast('COROS 同步失败，30 分钟后会再试');
     return { ok: false, error: e };
   } finally {
     corosAutoBusy = false;
@@ -1443,7 +1481,11 @@ function heroWords(pct) {
 }
 
 function healthCells(day) {
-  const h = S.health[day] || {};
+  const own = S.health[day];
+  /* 今天还没有数据时回落到最近一天（7 天内）：状态栏不能一直空着。
+     但必须在下方的提示行里标注数据日期，不能拿昨天的数值冒充今天。 */
+  const srcDay = own ? day : (day === TODAY() ? latestHealthDay(7) : null);
+  const h = (srcDay && S.health[srcDay]) || {};
   /* 只留三格：训练负荷对日常决策帮助最小（且 COROS 常给空值），
      移除后网格改为 3 列；它在趋势页的相关性与详情弹层里仍可查看。 */
   const cells = [
@@ -1451,8 +1493,8 @@ function healthCells(day) {
     { k: 'HRV', f: 'hrv', v: h.hrv == null ? '—' : Math.round(h.hrv), u: 'ms' },
     { k: '静息心率', f: 'resting_hr', v: h.resting_hr == null ? '—' : Math.round(h.resting_hr), u: 'bpm' }
   ];
-  return '<div class="health">' + cells.map(c => {
-    const d = day === TODAY() ? fieldDelta(c.f) : null;
+  return '<div class="health"' + (srcDay && srcDay !== day ? ' data-day="' + srcDay + '"' : '') + '>' + cells.map(c => {
+    const d = srcDay ? fieldDeltaAt(c.f, srcDay) : null;
     let dh = '';
     if (d && c.v !== '—') {
       const f = BASE_FIELDS.find(x => x.f === c.f) || BASE_FIELDS[0];
@@ -1528,8 +1570,10 @@ function renderToday() {
 
   html += healthCells(day);
   if (!h) {
+    const last = latestHealthDay(7);
+    const md = last ? (Number(last.slice(5, 7)) + '月' + Number(last.slice(8, 10)) + '日') : '';
     html += '<div class="gfoot" style="display:flex;align-items:center;justify-content:space-between">' +
-      '<span>身体数据未同步</span>' +
+      '<span>' + (last ? '今天还没同步 · 上面是 ' + md + ' 的数据' : '身体数据未同步') + '</span>' +
       '<button class="pill" data-act="corosSync" style="font-size:12px;padding:4px 10px">立即同步</button></div>';
   }
 
@@ -2831,7 +2875,7 @@ async function enterApp(session) {
     S.loading = false;
     saveSnapshot();
     render();
-    if (window.Coros) Coros.afterLogin();
+    if (window.Coros) { try { await Coros.afterLogin(); } catch (e) {} }
     // 先把上次离线攒下的打卡补传，再重载一次让界面与云端一致
     const f = await flushPending();
     if (f.ok) { try { await loadAll(); saveSnapshot(); render(); } catch (e) {} }
@@ -2925,6 +2969,9 @@ function initAutoRefresh() {
     S.offline = false;
     autoRefreshToday(true);      // 先回放离线队列，再全量刷新（串行，不并发）
   });
+  /* 看门狗：应用常驻不切后台时，visibilitychange/focus 都不会触发，
+     每日同步就永远等不到机会。每 5 分钟做一次纯本地判断，未同步才真正联网。 */
+  setInterval(function () { if (S.user) syncCorosDaily(); }, 5 * 60 * 1000);
 }
 
 async function boot() {

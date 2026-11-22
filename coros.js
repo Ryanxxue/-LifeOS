@@ -154,11 +154,17 @@ async function persist(tok, clientId) {
   await window.LifeApp.saveKv(KV_KEY, cache);
 }
 
+let loadedAt = 0;
 async function loadAuth() {
   if (loaded) return cache;
-  loaded = true;
+  /* 原来先把 loaded 置 true 再请求：一次网络抖动就会把 cache 永久留空，
+     之后 status() 一直判「未连接」，自动同步永远静默跳过。改成只有读成功
+     才落 loaded（无论有没有令牌），失败允许重试，5 秒内不重复请求。 */
+  if (Date.now() - loadedAt < 5000) return cache;
+  loadedAt = Date.now();
   try {
     const v = await window.LifeApp.getKv(KV_KEY);
+    loaded = true;
     if (v && v.access_token) cache = v;
   } catch (e) { console.warn('[coros] load auth', e); }
   return cache;
