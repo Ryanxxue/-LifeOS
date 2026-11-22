@@ -224,7 +224,7 @@ TEST = r'''
        !!q1('#view-calendar .cal-cell.hasact') &&
        !!q1('#view-calendar .cal-cell.hasact .act-badge svg') &&
        !/绿点/.test(q1('#view-calendar').textContent) &&
-       /本月运动 \d+ 次/.test(q1('#view-calendar').textContent));
+       /运动 \d+ 次/.test(q1('#view-calendar').textContent));
     const actDay = dayAt(-1);
     const calCell = q1('#view-calendar [data-act="calday"][data-id="' + actDay + '"]');
     if (calCell) calCell.click(); else { S.selDay = actDay; window.LifeApp.render(); }
@@ -715,16 +715,22 @@ TEST = r'''
        document.querySelectorAll('#view-trend .mcell').length === 3 &&
        gridCols.split(' ').length === 3 &&
        !!q1('#view-trend .mcell .cmp') && !!q1('#view-trend .mcell .spark svg'), gridCols);
+    /* 图表类型现在是图卡的"标题"（嵌在 .chart-head 里的 seg），不再是独立一行 */
+    const chartCard0 = q1('#view-trend .chartcard');
     ok('P0-5：图表默认单指标且末端标注当前值',
        !!q1('#view-trend .chartcard .chart-current') &&
        q1('#view-trend .chart-seg [data-id="rate"]').classList.contains('on') &&
-       /打卡完成率/.test(q1('#view-trend .chartcard .t').textContent));
+       !!chartCard0.querySelector('.chart-head .chart-seg') &&
+       /完成率/.test(chartCard0.textContent));
     q1('#view-trend .chart-seg [data-id="sleep"]').click(); await tick();
     ok('P0-5：可切换到睡眠单指标',
-       /睡眠时长/.test(q1('#view-trend .chartcard .t').textContent));
+       q1('#view-trend .chart-seg [data-id="sleep"]').classList.contains('on') &&
+       /睡眠/.test(q1('#view-trend .chartcard').textContent));
     q1('#view-trend .chart-seg [data-id="both"]').click(); await tick();
     ok('P0-5：可切换叠加视图',
-       /完成率与睡眠/.test(q1('#view-trend .chartcard .t').textContent));
+       q1('#view-trend .chart-seg [data-id="both"]').classList.contains('on') &&
+       /完成率/.test(q1('#view-trend .chartcard').textContent) &&
+       /睡眠/.test(q1('#view-trend .chartcard').textContent));
     const hitEl = q1('#view-trend .chartwrap rect.hit[data-act="chartday"]');
     ok('P0-5：图表每个日期都有点击热区', !!hitEl && !!hitEl.getAttribute('data-id'));
     if (hitEl) {
@@ -799,7 +805,7 @@ TEST = r'''
     const tabBg = tabEl ? getComputedStyle(tabEl).backgroundColor : '';
     const navBg = navEl ? getComputedStyle(navEl).backgroundColor : '';
     ok('iOS 26：标签栏是浮动玻璃胶囊',
-       tbRadius >= 20 && tbLeft >= 8 && /border-radius:28px/.test(cssText),
+       tbRadius >= 20 && tbLeft >= 8 && /border-radius:999px/.test(cssText),
        'r=' + tbRadius + ' left=' + tbLeft);
     ok('iOS 26：组件覆盖未被 :is() 里的 ID 特异性压掉',
        /rgba\(26, 26, 32/.test(tabBg) && /rgba\(0, 0, 0, 0\)|transparent/.test(navBg),

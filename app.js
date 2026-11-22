@@ -1585,6 +1585,9 @@ function habitChip(h, day, actName) {
     '</div>';
 }
 
+/* 纵向行（日历、首页编辑态）与横排格共用同一个勾选框：勾选框固定在最左，
+   编辑态在右侧换成删除按钮。以前这里画的是 30px 彩色图标 + 右侧圆圈勾，
+   跟首页的方形勾选框是两套外观，同一个动作要认两遍。 */
 function habitRow(h, day, editing, actName) {
   const on = isDone(h.id, day);
   /* 打卡是核心动作，必须能被键盘与读屏操作；编辑态下父行不可打卡，不再放进 Tab 序列 */
@@ -1592,12 +1595,14 @@ function habitRow(h, day, editing, actName) {
     ' role="checkbox" tabindex="0" aria-checked="' + (on ? 'true' : 'false') +
     '" aria-label="' + esc(h.name + '，' + (on ? '已完成' : '未完成')) + '"';
   const pend = pendingOf(h.id, day) !== undefined;
+  const col = h.color || '#0A84FF';
   return '<div class="lrow' + (on ? ' done' : '') + (pend ? ' pending' : '') + '" data-act="' + actName + '" data-id="' + h.id + '" data-day="' + day + '"' + a11y + '>' +
-    '<div class="licon" style="background:' + esc(h.color) + '">' + icon(h.icon || 'circle', 17) + '</div>' +
+    '<div class="hbox" style="border-color:' + esc(on ? col : tint(col, 0.5)) +
+    ';background:' + esc(on ? col : 'transparent') + ';color:' + esc(on ? '#fff' : 'transparent') + '">' +
+    '<span class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 15) : '') + '</span></div>' +
     '<div class="lbody"><div class="lrow-t">' + esc(h.name) + '</div>' +
     '<div class="lrow-sub">' + esc(h.target || '每天') + (pend ? ' · 待同步' : '') + '</div></div>' +
-    (editing ? '<div class="minus" data-act="delhabit" data-id="' + h.id + '">' + icon('minus', 15) + '</div>'
-             : '<div class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 15) : '') + '</div>') +
+    (editing ? '<div class="minus" data-act="delhabit" data-id="' + h.id + '">' + icon('minus', 15) + '</div>' : '') +
     '</div>';
 }
 
@@ -1623,7 +1628,7 @@ function renderToday() {
   /* 打卡是核心动作，紧跟今日状态 */
   html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
     '<span>今日打卡' + (total ? '<span class="gnum" id="habit-prog">' + done + '/' + total + '</span>' : '') + '</span>' +
-    (total ? '<button style="color:var(--blue);font-size:13.5px" data-act="edittoggle">' + (S.editing ? '完成' : '编辑') + '</button>' : '') +
+    (total ? '<button style="color:var(--blue);font-size:14px" data-act="edittoggle">' + (S.editing ? '完成' : '编辑') + '</button>' : '') +
     '</div>';
 
   if (!total) {
@@ -1643,18 +1648,26 @@ function renderToday() {
 
   html += reviewHTML();
 
+  /* 在读：两条紧凑行，不再用 176px 的封面横滑——只有一本时右半边全是空的，
+     而且它比"今日状态"高两倍，首屏重心被一张书封抢走。 */
   if (reading.length) {
-    html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
-      '<span>在读</span><button style="color:var(--blue);font-size:13.5px" data-act="tab" data-id="library">全部</button></div>';
-    html += '<div class="card"><div class="rail">' + reading.map(b =>
-      '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
-      '<div class="bk-t">' + esc(b.title) + '</div><div class="bk-a">' + esc(b.author || '') + '</div></div>').join('') +
-      '</div></div>';
+    html += '<div class="sec-head"><div class="sec-t">在读</div>' +
+      '<button style="color:var(--blue);font-size:14px" data-act="tab" data-id="library">全部</button></div>';
+    html += '<div class="card">' + reading.slice(0, 2).map(b => {
+      const pr = Math.max(0, Math.min(100, Number(b.progress) || 0));
+      const sub = [b.author || '', pr > 0 ? pr + '%' : ''].filter(Boolean).join(' · ');
+      return '<div class="lrow bookrow" data-act="openbook" data-id="' + b.id + '">' + bookCover(b, 'xs') +
+        '<div class="lbody"><div class="lrow-t">' + esc(b.title) + '</div>' +
+        '<div class="lrow-sub">' + esc(sub || '在读') + '</div></div>' +
+        '<div class="chev">' + icon('chev', 15) + '</div></div>';
+    }).join('') + '</div>';
   }
 
   if (S.activities.length) {
     const a = S.activities[0];
-    const dstr = String(a.day).slice(0, 10);
+    /* 日期跟全站统一用「11月21日」，不要再出现 2026-11-21 这种机器格式 */
+    const ad = parseDay(String(a.day).slice(0, 10));
+    const dstr = (ad.getMonth() + 1) + '月' + ad.getDate() + '日';
     html += '<div class="gtitle">最近运动</div><div class="card">' +
       '<div class="lrow" style="cursor:default">' +
       '<div class="licon" style="background:var(--green)">' + sportIcon(a, 17) + '</div>' +
@@ -1680,9 +1693,11 @@ function coverOf(b) {
   for (let i = 0; i < t.length; i++) hsum = (hsum * 31 + t.charCodeAt(i)) % 99991;
   return COVER_PAIRS[hsum % COVER_PAIRS.length];
 }
-function bookCover(b, big) {
+/* size: undefined=书架/横滑默认尺寸，'lg'=书籍详情大封面，'xs'=在读列表里的小封面 */
+function bookCover(b, size) {
   const c = coverOf(b);
-  return '<div class="bk-cover' + (big ? ' lg' : '') + '" style="background-image:' +
+  const cls = size === 'xs' ? ' xs' : (size === 'lg' || size === true) ? ' lg' : '';
+  return '<div class="bk-cover' + cls + '" style="background-image:' +
     'linear-gradient(180deg,rgba(0,0,0,.46) 0%,rgba(0,0,0,.10) 42%,rgba(0,0,0,.34) 100%),' +
     'linear-gradient(140deg,' + c[0] + ',' + c[1] + ')">' +
     '<span>' + esc(b.title) + '</span></div>';
@@ -1770,17 +1785,17 @@ function renderCalendar() {
   const anyDays = monthDays.filter(k => levelOf(k) > 0).length;
   const monthActs = monthDays.reduce((n, k) => n + activitiesForDay(k).length, 0);
 
-  let html = '<div class="head"><div class="date">完成 ' + fullDays + ' 天 · 有记录 ' + anyDays +
-    ' 天 · 本月运动 ' + monthActs + ' 次' +
+  let html = '<div class="head"><div class="date">本月完成 ' + fullDays + ' 天' +
+    (monthActs ? ' · 运动 ' + monthActs + ' 次' : '') +
     (S.limits && S.limits.activities ? '（仅按最近 ' + LOAD_LIMITS.activities + ' 条运动统计）' : '') +
     '</div><h2>日历</h2></div>';
 
   html += '<div class="cal" id="cal-box"><div class="cal-top">' +
     '<button class="m" data-act="caljump" aria-label="跳转到年月" ' +
-    'style="display:flex;align-items:center;gap:4px;font-size:16px;font-weight:500">' +
+    'style="display:flex;align-items:center;gap:4px;font-size:17px;font-weight:500">' +
     y + ' 年 ' + (mo + 1) + ' 月 ' + icon('chev', 13) + '</button>' +
     '<div class="cal-nav">' +
-    '<button data-act="caltoday" aria-label="回到今天" style="width:auto;padding:0 10px;font-size:12px;border-radius:16px">今天</button>' +
+    '<button data-act="caltoday" aria-label="回到今天" style="width:auto;padding:0 10px;font-size:12.5px;border-radius:999px">今天</button>' +
     '<button data-act="calprev" aria-label="上个月">' + icon('left', 17) + '</button>' +
     '<button data-act="calnext" aria-label="下个月">' + icon('chev', 17) + '</button></div></div>' +
     '<div class="wk">' + WK.map(w => '<div>' + w + '</div>').join('') + '</div>' +
@@ -1796,23 +1811,18 @@ function renderCalendar() {
   if (!dayEntries(S.selDay)) {
     html += '<div class="card"><div class="empty">这一天还没有打卡项</div></div>';
   } else {
-    html += '<div class="card">' + habitsForDay(S.selDay).map(h =>
-      '<div class="lrow' + (isDone(h.id, S.selDay) ? ' done' : '') + '" data-act="daytoggle" data-id="' + h.id + '" data-day="' + S.selDay + '">' +
-      '<div class="licon" style="background:' + esc(h.color) + '">' + icon(h.icon || 'circle', 17) + '</div>' +
-      '<div class="lbody"><div class="lrow-t">' + esc(h.name) + '</div>' +
-      '<div class="lrow-sub">' + esc(h.target || '每天') + '</div></div>' +
-      '<div class="chk' + (isDone(h.id, S.selDay) ? ' on' : '') + '">' + (isDone(h.id, S.selDay) ? icon('check', 15) : '') + '</div>' +
-      '</div>').join('') + '</div>';
+    html += '<div class="card">' +
+      habitsForDay(S.selDay).map(h => habitRow(h, S.selDay, false, 'daytoggle')).join('') + '</div>';
   }
 
   const acts = activitiesForDay(S.selDay);
   html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
     '<span>运动记录 · ' + acts.length + ' 条</span>' +
-    '<button style="color:var(--blue);font-size:13.5px" data-act="corosSync">同步</button></div>';
+    '<button style="color:var(--blue);font-size:14px" data-act="corosSync">同步</button></div>';
   html += acts.length
     ? '<div class="card">' + acts.map(activityRow).join('') + '</div>'
-    : '<div class="card"><div class="empty" style="padding:22px 16px">这一天没有运动记录<br>' +
-      '<span style="font-size:12px">连接 COROS 后，运动会自动落到对应日期</span></div></div>';
+    : '<div class="card"><div class="empty sm">这一天没有运动记录<br>' +
+      '<span class="eh">连接 COROS 后，运动会自动落到对应日期</span></div></div>';
 
   $('#view-calendar').innerHTML = html;
 }
@@ -1836,24 +1846,29 @@ function renderLibrary() {
     lim.notes ? '划线仅显示最近 ' + LOAD_LIMITS.notes + ' 条' : ''
   ].filter(Boolean).join(' · ');
   let html = '<div class="head"><div class="date">共 ' + books.length + ' 本 · ' +
-    activeNotes().length + ' 条划线 · ' + plans.length + ' 个计划 · 本周 ' + weekLogs +
-    ' 次记录' + (limTxt ? ' · ' + limTxt : '') +
+    activeNotes().length + ' 条划线 · ' + plans.length + ' 个计划' + (limTxt ? ' · ' + limTxt : '') +
     '</div><h2>阅读与学习</h2></div>';
 
+  /* 一行工具条：标签 + 同步按钮。原来「标签 / 统计 / 从微信读书同步 / 未配置 Key / 筛选」
+     五行走完才看到书；现在统计进了页头、同步收成图标，筛选并进书架标题右边 */
   html += '<div class="lib-nav"><div class="seg">' +
     [['lib-books', '书架'], ['lib-plans', '计划'], ['lib-logs', '记录']].map(x =>
       '<button class="' + (S.libSec === x[0] ? 'on' : '') + '" data-act="libsec" data-id="' +
-      x[0] + '">' + x[1] + '</button>').join('') + '</div></div>';
+      x[0] + '">' + x[1] + '</button>').join('') + '</div>' +
+    '<button class="iconbtn" data-act="wereadsync" aria-label="从微信读书同步" title="从微信读书同步">' +
+    icon('refresh', 16) + '</button></div>';
 
   /* ---- 左列：书架 ---- */
-  let left = '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
-    '<span>书架 · ' + list.length + ' 本</span>' +
-    '<button style="color:var(--blue);font-size:13.5px" data-act="wereadsync">从微信读书同步</button></div>';
-  left += '<div class="gfoot" style="margin:0 4px 8px">' + esc(wereadStatusText()) +
-    (S.wereadKey ? ' · API 已配置' : ' · 未配置 API Key') + '</div>';
-  left += '<div class="seg">' +
+  let left = '<div class="sec-head"><div class="sec-t">书架 · ' + list.length + ' 本</div>' +
+    '<div class="seg mini">' +
     [['all', '全部'], ['reading', '在读'], ['done', '读完']].map(x =>
-      '<button class="' + (f === x[0] ? 'on' : '') + '" data-act="filter" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div>';
+      '<button class="' + (f === x[0] ? 'on' : '') + '" data-act="filter" data-id="' + x[0] + '">' + x[1] + '</button>').join('') +
+    '</div></div>';
+  /* 只有「没配 Key」才占一行——正常状态不该常驻一条说明 */
+  if (!S.wereadKey) {
+    left += '<div class="gfoot">未配置微信读书 API Key · ' +
+      '<button style="color:var(--blue);font-size:12.5px" data-act="wereadsync">去配置</button></div>';
+  }
   if (!list.length) {
     left += '<div class="card"><div class="empty">书架还是空的。<br>可以从微信读书粘贴导入，也可以手动添加；<br>点右上「+」→「添加书籍」即可开始。</div>' +
       '<div class="addrow" data-act="addbook">' + icon('plus', 17) + '添加书籍</div></div>';
@@ -1871,9 +1886,8 @@ function renderLibrary() {
   }
 
   /* ---- 右列：学习计划 ---- */
-  let planHtml = '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
-    '<span>学习计划 · ' + plans.length + ' 个</span>' +
-    '<button style="color:var(--blue);font-size:13.5px" data-act="newplan">新建</button></div>';
+  let planHtml = '<div class="sec-head"><div class="sec-t">学习计划 · ' + plans.length + ' 个</div>' +
+    '<button style="color:var(--blue);font-size:14px" data-act="newplan">新建</button></div>';
   if (!plans.length) {
     planHtml += '<div class="card"><div class="empty">还没有学习计划。<br>建一个，比如「每周读 3 次专业书」。</div>' +
       '<div class="addrow" data-act="newplan">' + icon('plus', 17) + '新建计划</div></div>';
@@ -1900,7 +1914,7 @@ function renderLibrary() {
   }
 
   /* ---- 右列：最近记录 ---- */
-  let logsHtml = '<div class="gtitle">最近记录</div>';
+  let logsHtml = '<div class="sec-head"><div class="sec-t">最近记录</div></div>';
   const recent = S.logs.slice(0, 5);
   if (recent.length) {
     logsHtml += '<div class="card">' + recent.map(l => {
@@ -1912,8 +1926,8 @@ function renderLibrary() {
         '<div class="lrow-sub">' + (dd.getMonth() + 1) + '月' + dd.getDate() + '日</div></div></div>';
     }).join('') + '</div>';
   } else {
-    logsHtml += '<div class="card"><div class="empty" style="padding:22px 16px">还没有学习记录<br>' +
-      '<span style="font-size:12px">在上方计划点「记一次」，这里会按时间列出</span></div></div>';
+    logsHtml += '<div class="card"><div class="empty sm">还没有学习记录<br>' +
+      '<span class="eh">在上方计划点「记一次」，这里会按时间列出</span></div></div>';
   }
 
   html += '<div class="lib-cols"><div class="lib-left" id="lib-books">' + left + '</div>' +
@@ -1936,8 +1950,8 @@ function openBook(id) {
     '<div style="display:flex;gap:14px;align-items:flex-start;padding:4px 0 16px">' +
     bookCover(b, true) +
     '<div style="flex:1;min-width:0">' +
-    '<div style="font-size:18px;font-weight:500;line-height:1.3">' + esc(b.title) + '</div>' +
-    '<div style="font-size:13px;color:var(--text-2);margin-top:4px">' + esc(b.author || '未填作者') + '</div>' +
+    '<div style="font-size:22px;font-weight:500;line-height:1.3">' + esc(b.title) + '</div>' +
+    '<div style="font-size:14px;color:var(--text-2);margin-top:4px">' + esc(b.author || '未填作者') + '</div>' +
     '<div style="font-size:12.5px;color:var(--text-3);margin-top:8px">' + (b.status === 'done' ? '已读完' : '在读') +
     ' · ' + notes.length + ' 条划线</div>' +
     '<div class="bar" style="margin:10px 0 0"><i style="width:' + Math.max(0, Math.min(100, b.progress || 0)) + '%"></i></div>' +
@@ -1947,7 +1961,7 @@ function openBook(id) {
       '<div class="note"><div class="ch">' + esc(n.chapter || '') + '</div>' +
       '<div class="tx">' + esc(n.content) + '</div>' +
       '<button class="x" data-act="delnote" data-id="' + n.id + '">' + icon('x', 13) + '</button></div>').join('')
-      : '<div class="empty" style="padding:20px 0">还没有划线</div>') +
+      : '<div class="empty sm">还没有划线</div>') +
     '<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px">' +
     '<button class="btnblock gray" data-act="togglebookstatus" data-id="' + b.id + '">' +
     (b.status === 'done' ? '标记为在读' : '标记为读完') + '</button>' +
@@ -2085,14 +2099,16 @@ function renderTrend() {
   const prevSleep = avgMetric(sleepGet, S.range, S.range);
   const prevHrv = avgMetric(hrvGet, S.range, S.range);
 
-  let html = '<div class="head"><div class="date">近 ' + S.range + ' 天</div><h2>趋势</h2></div>';
+  const trendHave = S.health ? Object.keys(S.health).length : 0;
+  let html = '<div class="head"><div class="date">近 ' + S.range + ' 天 · ' +
+    trendHave + ' 天有身体数据</div><h2>趋势</h2></div>';
 
   html += '<div class="seg">' + [30, 60, 90].map(n =>
     '<button class="' + (S.range === n ? 'on' : '') + '" data-act="range" data-id="' + n + '">' + n + ' 天</button>').join('') + '</div>';
 
   const cards = [
     { k: '打卡完成率', v: avgRate === null ? '—' : Math.round(avgRate * 100) + '<span style="font-size:15px">%</span>',
-      d: rates.length + ' 天有有效打卡项', cur: avgRate, prev: prevRate,
+      d: rates.length + ' 天有效', cur: avgRate, prev: prevRate,
       s: seriesBack(Math.min(S.range, 30), rateGet), c: 'var(--blue)' },
     { k: '平均睡眠', v: avgSleep === null ? '—' : fmt1(avgSleep) + '<span style="font-size:15px">h</span>',
       d: hs.length + ' 天有数据', cur: avgSleep, prev: prevSleep,
@@ -2109,18 +2125,17 @@ function renderTrend() {
   const mode = S.chartMode || 'rate';
   const rateLine = { get: rateGet, min: 0, max: 1, color: 'var(--blue)', fmt: v => Math.round(v * 100) + '%' };
   const sleepLine = { get: sleepGet, min: 0, max: 10, color: 'var(--orange)', fmt: v => (Math.round(v * 10) / 10).toFixed(1) + 'h' };
-  html += '<div class="seg chart-seg" style="margin-top:12px">' +
+  const lines1 = mode === 'both' ? [rateLine, sleepLine] : (mode === 'sleep' ? [sleepLine] : [rateLine]);
+  /* 图表类型不再单独占一行 seg：它就是这个图的标题，放进图卡头部右边；
+     只有「叠加」时才需要图例（单序列时按钮本身就说明了画的是什么） */
+  const modeSeg = '<div class="seg mini chart-seg">' +
     [['rate', '完成率'], ['sleep', '睡眠'], ['both', '叠加']].map(x =>
       '<button class="' + (mode === x[0] ? 'on' : '') + '" data-act="chartmode" data-id="' + x[0] + '">' + x[1] + '</button>').join('') + '</div>';
-
-  const lines1 = mode === 'both' ? [rateLine, sleepLine] : (mode === 'sleep' ? [sleepLine] : [rateLine]);
-  const title1 = mode === 'both' ? '完成率与睡眠' : (mode === 'sleep' ? '睡眠时长' : '打卡完成率');
   const lg1 = mode === 'both'
-    ? '<span><i style="background:var(--blue)"></i>完成率</span><span><i style="background:var(--orange)"></i>睡眠(h)</span>'
-    : (mode === 'sleep' ? '<span><i style="background:var(--orange)"></i>睡眠(h)</span>'
-                        : '<span><i style="background:var(--blue)"></i>完成率</span>');
-  html += '<div class="chartcard"><div class="chart-head"><div class="t">' + title1 + '</div>' +
-    '<div class="lg">' + lg1 + '</div></div>' + chartSVG(days, lines1, { hit: true }) + '</div>';
+    ? '<div class="lg"><span><i style="background:var(--blue)"></i>完成率</span><span><i style="background:var(--orange)"></i>睡眠(h)</span></div>'
+    : '';
+  html += '<div class="chartcard"><div class="chart-head">' + modeSeg + lg1 + '</div>' +
+    chartSVG(days, lines1, { hit: true }) + '</div>';
 
   const rhrs = days.map(rhrGet).filter(v => v !== null);
   const pool = hrvs.map(Number).concat(rhrs.map(Number));
@@ -2146,7 +2161,10 @@ function renderMe() {
   const coros = window.Coros ? Coros.status() : { connected: false };
   const sync = S.health[TODAY()];
 
-  let html = '<div class="head"><div class="date">账户与连接</div><h2>我的</h2></div>';
+  const dhHead = dataHealth();
+  let html = '<div class="head"><div class="date">' +
+    (dhHead.connected ? 'COROS 已连接' : 'COROS 未连接') +
+    (dhHead.lastSync ? ' · 上次同步 ' + esc(dhHead.lastSync) : '') + '</div><h2>我的</h2></div>';
 
   html += '<div class="card"><div class="profile"><div class="avatar">' +
     (u.avatarUrl ? '<img src="' + esc(u.avatarUrl) + '" alt="">' : esc(initial)) + '</div>' +
@@ -2223,7 +2241,7 @@ function renderMe() {
   const sinceExport = lastExport ? Math.floor((Date.now() - new Date(lastExport).getTime()) / 86400000) : null;
   html += '<div class="gtitle">数据与备份</div><div class="card">' +
     (sinceExport === null || sinceExport >= 7
-      ? '<div class="rowbtn" style="cursor:default"><div style="flex:1;font-size:13px;color:var(--orange)">' +
+      ? '<div class="rowbtn" style="cursor:default"><div style="flex:1;font-size:14px;color:var(--orange)">' +
         (sinceExport === null ? '还没有导出过备份，建议先导出一份' : '距上次导出已 ' + sinceExport + ' 天，建议重新导出') +
         '</div></div>' : '') +
     '<button class="rowbtn" data-act="exportbackup">' +
@@ -2246,8 +2264,8 @@ function renderMe() {
       '<div class="icbox" style="background:' + esc(h.color) + '">' + icon(h.icon || 'circle', 16) + '</div>' +
       '<div style="flex:1;min-width:0"><div class="rb-t">' + esc(h.name) + '</div>' +
       '<div class="rb-s">' + esc(h.target || '每天') + '</div></div>' +
-      '<button style="color:var(--red);font-size:13.5px;padding:6px 2px" data-act="delhabit" data-id="' + h.id + '">删除</button>' +
-      '</div>').join('') : '<div class="empty" style="padding:22px 16px">还没有打卡项</div>') +
+      '<button style="color:var(--red);font-size:14px;padding:6px 2px" data-act="delhabit" data-id="' + h.id + '">删除</button>' +
+      '</div>').join('') : '<div class="empty sm">还没有打卡项</div>') +
     '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div></div>';
 
   html += '<div style="margin-top:24px"><button class="btnblock gray danger" data-act="logout">退出登录</button></div>';
@@ -2491,7 +2509,7 @@ function openImportSheet() {
     '<div class="gfoot" style="margin:0 4px 10px">在微信读书里选中一段划线，复制后粘贴到这里。第一行写书名（可选，格式「书名 - 作者」），下面每条划线换行即可。也支持粘贴整页笔记。</div>' +
     '<textarea id="wr-text" placeholder="反脆弱 - 塔勒布&#10;允许自己犯错，是反脆弱的第一步。&#10;系统的韧性来自冗余。"></textarea>' +
     '<div style="margin-top:12px"><button class="btnblock blue" data-act="doimport">解析并导入</button></div>' +
-    '<div style="text-align:center;margin-top:10px"><button style="color:var(--blue);font-size:13.5px" data-act="demofill">填入一段示例</button></div>' +
+    '<div style="text-align:center;margin-top:10px"><button style="color:var(--blue);font-size:14px" data-act="demofill">填入一段示例</button></div>' +
     '</div>';
   openSheet(html);
 }
@@ -2845,7 +2863,7 @@ document.addEventListener('click', async function (ev) {
           : '还没有同步记录。') + '</div>';
       if (diag && diag.ok === false && diag.error) {
         html += '<div class="gtitle">失败原因</div><div class="card" style="padding:14px">' +
-          '<div style="font-size:13px;color:var(--red);line-height:1.6">' + esc(diag.error) + '</div></div>';
+          '<div style="font-size:14px;color:var(--red);line-height:1.6">' + esc(diag.error) + '</div></div>';
       }
       if (w.length) {
         html += '<div class="gtitle">未识别字段（' + w.length + '）</div>' + w.map(x =>
@@ -2860,11 +2878,11 @@ document.addEventListener('click', async function (ev) {
       if (diag && Array.isArray(diag.samples) && diag.samples.length) {
         html += '<div class="gtitle">原始返回样本</div>' + diag.samples.map(x =>
           '<div class="note"><div class="ch">' + esc(x.tool || '') + ' · ' + esc(x.kind || '') + '</div>' +
-          '<div class="tx" style="font-size:11.5px;white-space:pre-wrap;word-break:break-all">' +
+          '<div class="tx" style="font-size:12.5px;white-space:pre-wrap;word-break:break-all">' +
           esc(String(x.preview || '')) + '</div></div>').join('');
       }
       if (!w.length && !(diag && diag.log && diag.log.length)) {
-        html += '<div class="empty" style="padding:20px 0">上次同步没有未识别字段。</div>';
+        html += '<div class="empty sm">上次同步没有未识别字段。</div>';
       }
       html += '</div>';
       openSheet(html);
@@ -2961,9 +2979,9 @@ async function enterApp(session) {
                 : '数据加载失败：' + ((e && e.message) || '未知原因') + ' · 正在显示本机缓存', null, 6000);
     } else {
       renderChrome();
-      $('#view-today').innerHTML = '<div class="empty" style="padding-top:80px">' +
+      $('#view-today').innerHTML = '<div class="empty tall">' +
         (net ? '离线，且本机还没有缓存' : '数据加载失败') +
-        '<br><span style="font-size:12.5px">' + esc(e && e.message || '网络异常') +
+        '<br><span class="eh">' + esc(e && e.message || '网络异常') +
         '</span><br><br><button class="pill" onclick="location.reload()">重试</button></div>';
     }
   }
