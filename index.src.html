@@ -149,46 +149,43 @@ svg{display:block}
 .addrow{display:flex;align-items:center;gap:10px;padding:12px 14px;color:var(--blue);font-size:15px;cursor:pointer;background:var(--card)}
 .addrow:active{background:var(--fill)}
 
-/* ---------- 今日打卡：横排打勾框 ----------
-   纵向列表是「一项 57px」，5 项就 280px；横排后固定约 69px，习惯多了横向滑动。
-   每项是一个勾选框（.hbox）：未完成＝习惯色半透明描边、透明底；完成＝实色底 + 白勾。
-   不再画习惯图标——真实数据里图标大多相同，一排重复反而看不出打卡状态。
-   30+5+一行 11.5px 标签 ≈ 50，配 10/8 内边距整卡约 69，与状态条 74、回顾条 44
-   形成递减节奏。 */
-.stripcard{padding:0}
-.habit-strip{display:flex;gap:6px;overflow-x:auto;padding:10px 10px 8px;
-  scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+/* ---------- 今日打卡：胶囊清单 ----------
+   每项是一条 34px 高的胶囊：左边 20px 勾选框，右边习惯名，宽度跟着名字走。
+   之前是「30px 空框 + 名称在下」的四等分格子，框漂在 110px 宽的格里、四周全是空气，
+   一排看过去像四个没填的表单；胶囊把勾和名字绑成一条，重量与实际点击面积一致。
+   习惯多了横向滑动（右缘渐隐），不再换行把首屏撑高。 */
+.habit-strip{display:flex;align-items:center;gap:8px;overflow-x:auto;
+  padding:0 0 2px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .habit-strip::-webkit-scrollbar{display:none}
-/* 习惯多到放不下时，右缘渐隐暗示可横向滑动；滑到末尾就撤掉，避免最后一项被虚化 */
-.habit-strip.scrollable{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 26px),transparent);
-  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 26px),transparent)}
+.habit-strip.scrollable{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 24px),transparent);
+  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 24px),transparent)}
 .habit-strip.scrollable.at-end{-webkit-mask-image:none;mask-image:none}
-/* flex:1 1 0 + min-width：少几项时按「剩余空间均分」把整条铺满（不再在右端留空白），
-   项多了缩到 62 就停、自然横向滚动。basis 必须是 0 而不是 auto——auto 会让长习惯名
-   把那一格撑宽（165/165/189），一排格子就不齐了。 */
-.lrow.chip{flex:1 1 0;min-width:62px;flex-direction:column;align-items:center;gap:6px;
-  padding:0 4px 1px;border-bottom:0;background:transparent;border-radius:10px;
-  scroll-snap-align:start}
-.card .lrow.chip:not(:last-child)::after{display:none}
-html[data-glass="on"] .lrow.chip:active{background-color:transparent}
-/* 勾选框本体：描边与底色都由 JS 内联（跟习惯色），这里只管形状与动效 */
+
+.hchip{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;
+  height:34px;padding:0 12px 0 8px;border-radius:999px;background:var(--fill);border:0;
+  font:inherit;color:var(--text);cursor:pointer;
+  transition:background .16s ease,transform .18s cubic-bezier(.32,.72,0,1)}
+.hchip:active{transform:scale(.96)}
+html[data-glass="on"] .hchip{background-color:var(--fill-2)}
+.hchip.done{background:var(--fill)}
+.hchip.done .hchip-t{color:var(--text-2)}
+.hchip.pending{box-shadow:inset 0 0 0 1.5px var(--orange)}
+.hchip-t{font-size:14px;line-height:1;white-space:nowrap}
+/* 胶囊里的勾选框比列表行小一号：20px 框配 12px 勾 */
+.hchip .hbox{width:20px;height:20px;border-radius:6px;border-width:1.5px}
+.hchip .chk svg{display:block}
+/* 「新建」是同形状的虚线条，色阶降一档，不跟真习惯抢 */
+.hchip.add{padding:0 12px;gap:6px;background:transparent;color:var(--text-3);
+  box-shadow:inset 0 0 0 1px var(--fill-3)}
+.hchip.add:active{color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue)}
+
+/* 勾选框本体（胶囊 / 列表行 / 日历日详情共用）：描边与底色由 JS 按习惯色内联 */
 .hbox{width:30px;height:30px;border-radius:10px;border:1.6px solid var(--fill-3);flex:none;
   display:grid;place-items:center;
   transition:background .18s ease,border-color .18s ease,color .18s ease,transform .22s cubic-bezier(.32,.72,0,1)}
-.lrow.chip:active .hbox{transform:scale(.92)}
-.lrow.chip .lbody{width:100%;text-align:center}
-.lrow.chip .lrow-t{font-size:12.5px;line-height:1.25;color:var(--text)}
-.lrow.chip .lrow-sub{display:none}
-/* 待同步：外框套一圈橙环（横排与纵向行一致） */
+.hchip:active .hbox,.lrow:active .hbox{transform:scale(.92)}
+/* 待同步：外框套一圈橙环（胶囊与纵向行一致） */
 .lrow.pending .hbox{box-shadow:0 0 0 2px var(--orange)}
-/* 新建格与习惯格同规则伸缩：否则 3 项时前三格被均分撑宽，「新建」还卡在 62，
-   右端会突然收窄，一眼看出没对齐 */
-.hchip-add{flex:1 0 auto;min-width:62px;display:flex;flex-direction:column;align-items:center;gap:6px;
-  padding:0 4px 1px;cursor:pointer;color:var(--text-3);border-radius:10px}
-.hchip-add .ha{width:30px;height:30px;border-radius:10px;border:1.5px dashed var(--fill-3);
-  display:grid;place-items:center;transition:transform .2s,color .2s,border-color .2s}
-.hchip-add:active .ha{transform:scale(.92);border-color:var(--blue);color:var(--blue)}
-.hchip-add .ha-t{font-size:12.5px;line-height:1.25}
 
 /* 在读 */
 /* 在读：封面横滑。这是首页最高的一栏，高度完全由封面（宽×4.35/3）决定，
@@ -196,6 +193,16 @@ html[data-glass="on"] .lrow.chip:active{background-color:transparent}
    比原来矮 21px，又保住封面能看清书名的尺寸。 */
 .rail{display:flex;gap:12px;overflow-x:auto;padding:12px;scrollbar-width:none}
 .rail::-webkit-scrollbar{display:none}
+/* 首页「在读」用的小号封面：60px 宽（封面 80px）+ 单行书名 + 进度细条，整卡约 126px */
+/* 首页「在读」：72px 宽的封面（96px 高）+ 单行书名 + 进度条，整卡约 142px——
+   比最早的 176 矮 34px，一本时也不至于是一只大空盒子 */
+.rail.sm{gap:10px}
+.rail.sm.scrollable{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 24px),transparent);
+  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 24px),transparent)}
+.rail.sm.scrollable.at-end{-webkit-mask-image:none;mask-image:none}
+.rail.sm .bk{width:72px}
+.rail.sm .bk-t{font-size:12.5px;margin-top:6px;-webkit-line-clamp:1}
+.rail.sm .bk-prog{margin-top:4px}
 .bk{width:78px;flex:none;cursor:pointer}
 .bk:active{transform:scale(.97)}
 .bk-cover{position:relative;width:100%;aspect-ratio:3/4.35;border-radius:6px;overflow:hidden;

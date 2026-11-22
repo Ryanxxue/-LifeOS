@@ -672,10 +672,10 @@ TEST = r'''
        !q1('#view-today .insight') && !q1('#view-today #week-review .insight') &&
        !/训练负荷/.test(q1('#view-today').textContent));
     const beforeProg = q1('#habit-prog') ? q1('#habit-prog').textContent : '';
-    const habitRow = q1('#view-today .lrow[data-act="toggle"]');
+    const habitRow = q1('#view-today .hchip[data-act="toggle"]');
     if (habitRow) habitRow.click(); await tick();
     ok('P0-3：打卡局部更新并带勾选动画，完成度小字同步',
-       !!q1('#view-today .lrow.pop') && !!q1('#habit-prog') &&
+       !!q1('#view-today .hchip.pop') && !!q1('#habit-prog') &&
        q1('#habit-prog').textContent !== beforeProg,
        beforeProg + ' -> ' + (q1('#habit-prog') ? q1('#habit-prog').textContent : ''));
 
@@ -840,8 +840,8 @@ TEST = r'''
        localStorage.getItem('lifeboard.glass') === 'on');
     goTab('today'); await tick();
 
-    /* --- 今日打卡：横排紧凑条 --- */
-    const chips = document.querySelectorAll('#view-today .habit-strip .lrow.chip');
+    /* --- 今日打卡：一行胶囊清单 --- */
+    const chips = document.querySelectorAll('#view-today .habit-strip .hchip:not(.add)');
     const strip = q1('#view-today .habit-strip');
     ok('今日页：首屏不再有完成度大卡片，第一块是今日状态（身体数据）',
        !q1('#view-today .hero') && !q1('#today-hero') &&
@@ -849,17 +849,22 @@ TEST = r'''
        q1('#view-today .habit-strip').getBoundingClientRect().top);
     ok('今日页：完成度收进打卡标题右侧的小字',
        !!q1('#habit-prog') && /^\d+\/\d+$/.test(q1('#habit-prog').textContent.trim()));
-    ok('今日打卡：正常态是一行横排圆点（含新建入口），不再是纵向列表',
-       chips.length >= 1 && !!q1('#view-today .hchip-add') && !!q1('#view-today .stripcard') &&
-       strip.getBoundingClientRect().height < 120);
-    const cw = Array.prototype.map.call(chips, c => Math.round(c.getBoundingClientRect().width));
-    ok('今日打卡：长习惯名不会把某一格撑宽（宽度一致）',
-       cw.length >= 2 && Math.max.apply(null, cw) - Math.min.apply(null, cw) <= 2,
-       'widths=' + cw.join(','));
+    ok('今日打卡：正常态是一行胶囊（含新建入口），不再是纵向列表',
+       chips.length >= 1 && !!q1('#view-today .hchip.add') && !q1('#view-today .stripcard') &&
+       strip.getBoundingClientRect().height < 44);
+    /* 胶囊宽度跟着名字走（这正是它比四等分格子好看的原因），要求的是「同高、不换行」 */
+    const ch = Array.prototype.map.call(chips, c => Math.round(c.getBoundingClientRect().height));
+    const tops = Array.prototype.map.call(chips, c => Math.round(c.getBoundingClientRect().top));
+    ok('今日打卡：胶囊同高、同一行内不换行，勾选框与名字内联排布',
+       ch.length >= 2 && Math.max.apply(null, ch) - Math.min.apply(null, ch) <= 1 &&
+       Math.max.apply(null, tops) - Math.min.apply(null, tops) <= 1 &&
+       chips[0].querySelector('.hbox') && chips[0].querySelector('.hchip-t') &&
+       chips[0].getBoundingClientRect().width > chips[0].querySelector('.hchip-t').getBoundingClientRect().width,
+       'h=' + ch.join(',') + ' top=' + tops.join(','));
     const chip0 = chips[0];
     const boxBefore = chip0 ? chip0.querySelector('.hbox').style.background : '';
     if (chip0) { chip0.click(); await sleep(150); }
-    const chipAfter = q1('#view-today .habit-strip .lrow.chip');
+    const chipAfter = q1('#view-today .habit-strip .hchip');
     /* 勾选框状态要能即时翻转：完成＝实色底 + 白勾，未完成＝透明底 + 描边，与 .done 严格对应 */
     ok('今日打卡：点一下勾选框即时翻转（实色+白勾 ↔ 空心描边），无需刷新',
        !!chipAfter && chipAfter.querySelector('.hbox').style.background !== boxBefore &&
@@ -964,7 +969,7 @@ TEST = r'''
     window.LifeApp.closeSheet();
     /* ==================== 交互可达性 / 离线 / 安全 / 打磨 ==================== */
     goTab('today'); await tick();
-    const ckRow = q1('#view-today .lrow[data-act="toggle"]');
+    const ckRow = q1('#view-today .hchip[data-act="toggle"]');
     ok('交互：打卡行可聚焦且角色/状态可读',
        !!ckRow && ckRow.getAttribute('role') === 'checkbox' && ckRow.getAttribute('tabindex') === '0' &&
        /^(true|false)$/.test(ckRow.getAttribute('aria-checked') || ''),
@@ -974,7 +979,7 @@ TEST = r'''
       ckRow.focus();
       ckRow.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       await tick();
-      const ckRow2 = q1('#view-today .lrow[data-act="toggle"]');
+      const ckRow2 = q1('#view-today .hchip[data-act="toggle"]');
       ok('交互：Enter 键可打卡且 aria-checked 同步',
          !!ckRow2 && ckRow2.getAttribute('aria-checked') !== a0,
          a0 + ' -> ' + (ckRow2 && ckRow2.getAttribute('aria-checked')));
@@ -1018,19 +1023,19 @@ TEST = r'''
     /* --- 离线打卡队列 --- */
     goTab('today');
     S.offline = true; window.LifeApp.render(); await tick();
-    const offRow = q1('#view-today .lrow[data-act="toggle"]');
+    const offRow = q1('#view-today .hchip[data-act="toggle"]');
     if (offRow) {
       offRow.click(); await tick();
       const pendN = Object.keys(S.pending || {}).length;
       ok('离线：打卡进入本机队列并标记待同步',
-         pendN >= 1 && !!q1('#view-today .lrow.pending') &&
+         pendN >= 1 && !!q1('#view-today .hchip.pending') &&
          /联网后自动同步/.test(q1('#toast').textContent) &&
          /待同步/.test(q1('#offline-bar').textContent),
          'pending=' + pendN + ' bar=' + q1('#offline-bar').textContent);
       S.offline = false;
       await window.LifeApp.refreshAll(); await tick();
       ok('离线：联网后队列回放并清空',
-         Object.keys(S.pending || {}).length === 0 && !q1('#view-today .lrow.pending'),
+         Object.keys(S.pending || {}).length === 0 && !q1('#view-today .hchip.pending'),
          'left=' + Object.keys(S.pending || {}).length);
     } else ok('离线：打卡进入本机队列并标记待同步', false, 'no habit row');
     S.offline = false; localStorage.removeItem('lb.pendingCheckins.v1'); S.pending = {};

@@ -1298,14 +1298,15 @@ function renderFreshness() {
 }
 /* 打卡只更新被点的行与今日环形，不再整页重绘；失败回滚走 toggleCheckin 内的全量 render */
 function patchCheckinUI(habitId, day, actName) {
-  const row = document.querySelector('.lrow[data-act="' + actName + '"][data-id="' + habitId + '"]');
+  /* 打卡项有两种形态：首页的胶囊（.hchip）与列表行（.lrow），两者都靠 data-act/data-id 定位 */
+  const row = document.querySelector('[data-act="' + actName + '"][data-id="' + habitId + '"]');
   if (row) {
     const on = isDone(habitId, day);
     row.classList.toggle('done', on);
     const chk = row.querySelector('.chk');
     if (chk) {
       chk.classList.toggle('on', on);
-      chk.innerHTML = on ? icon('check', 15) : '';
+      chk.innerHTML = on ? icon('check', row.classList.contains('hchip') ? 12 : 15) : '';
     }
     /* 横排项的外框是勾选框：未完成＝习惯色半透明描边 + 透明底，完成＝实色 + 白勾 */
     const hbox = row.querySelector('.hbox');
@@ -1318,7 +1319,7 @@ function patchCheckinUI(habitId, day, actName) {
     }
     if (row.hasAttribute('aria-checked')) {
       row.setAttribute('aria-checked', on ? 'true' : 'false');
-      const nm = row.querySelector('.lrow-t');
+      const nm = row.querySelector('.lrow-t, .hchip-t');
       if (nm) row.setAttribute('aria-label', nm.textContent + '，' + (on ? '已完成' : '未完成'));
     }
     const pend = pendingOf(habitId, day) !== undefined;
@@ -1563,26 +1564,24 @@ function tint(hex, alpha) {
   return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
 }
 
-/* 横排打卡项：一个勾选框 + 名称，一屏能放下 4–6 项。
-   以前每项画的是习惯图标，但用户在真实数据里所有习惯图标都一样（大多没设图标），
-   一排看起来完全重复，也看不出「有没有打过卡」；改成打勾框后，勾本身就是状态，
-   边框用习惯色只为区分相邻项，不再承担识别职责。
-   类名沿用 .lrow / .chk / .lrow-t ——patchCheckinUI 靠它们做局部更新
-   （打卡后只改这一格的内联色与 class，不重绘整页，滚动位置才不丢）。 */
+/* 今日打卡的每一项是一条胶囊：勾选框 + 名称，横向铺开、超宽就滑。
+   为什么不是「大方块 + 名称在下」：那几个 30px 空框漂在 110px 宽的格子里，
+   剩下的都是空气，一排看过去像四个未填的表格；胶囊把勾和名字绑在一起，
+   宽度跟着名字走，视觉重量与"一条可点的动作"相符。
+   勾选框（.hbox）与纵向行、日历日详情共用同一套。 */
 function habitChip(h, day, actName) {
   const on = isDone(h.id, day);
   const pend = pendingOf(h.id, day) !== undefined;
   const col = h.color || '#0A84FF';
   const a11y = ' role="checkbox" tabindex="0" aria-checked="' + (on ? 'true' : 'false') +
     '" aria-label="' + esc(h.name + '，' + (on ? '已完成' : '未完成')) + '"';
-  return '<div class="lrow chip' + (on ? ' done' : '') + (pend ? ' pending' : '') +
+  return '<div class="hchip' + (on ? ' done' : '') + (pend ? ' pending' : '') +
     '" data-act="' + actName + '" data-id="' + h.id + '" data-day="' + day + '"' + a11y + '>' +
     '<div class="hbox" style="border-color:' + esc(on ? col : tint(col, 0.5)) +
     ';background:' + esc(on ? col : 'transparent') + ';color:' + esc(on ? '#fff' : 'transparent') + '">' +
-    '<span class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 15) : '') + '</span></div>' +
-    '<div class="lbody"><div class="lrow-t">' + esc(h.name) + '</div>' +
-    '<div class="lrow-sub">' + esc(h.target || '每天') + (pend ? ' · 待同步' : '') + '</div></div>' +
-    '</div>';
+    '<span class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 12) : '') + '</span></div>' +
+    '<span class="hchip-t">' + esc(h.name) + '</span>' +
+    (pend ? '<span class="hchip-pend">待同步</span>' : '') + '</div>';
 }
 
 /* 纵向行（日历、首页编辑态）与横排格共用同一个勾选框：勾选框固定在最左，
@@ -1638,29 +1637,28 @@ function renderToday() {
     /* 编辑态保留纵向列表：删除按钮需要整行宽度，横向圆点放不下 */
     html += '<div class="card">' + habitsForDay(day).map(x => habitRow(x, day, true, 'toggle')).join('') + '</div>';
   } else {
-    /* 正常态：横向一排，高度从「行数×57px」压到固定约 94px，习惯多了横向滑动 */
-    html += '<div class="card stripcard"><div class="habit-strip">' +
+    /* 正常态：一行胶囊，高度固定 34px，习惯多了横向滑动。
+       不再套一层卡片——胶囊自己就是容器，少一层嵌套少一层边界。 */
+    html += '<div class="habit-strip" id="habit-strip">' +
       habitsForDay(day).map(x => habitChip(x, day, 'toggle')).join('') +
-      '<div class="hchip-add" data-act="newhabit" role="button" tabindex="0" aria-label="新建打卡项">' +
-        '<div class="ha">' + icon('plus', 19) + '</div><div class="ha-t">新建</div></div>' +
-      '</div></div>';
+      '<button class="hchip add" data-act="newhabit" aria-label="新建打卡项">' +
+        icon('plus', 13) + '<span class="hchip-t">新建</span></button>' +
+      '</div>';
   }
 
   html += reviewHTML();
 
-  /* 在读：两条紧凑行，不再用 176px 的封面横滑——只有一本时右半边全是空的，
-     而且它比"今日状态"高两倍，首屏重心被一张书封抢走。 */
+  /* 在读：封面横滑。缩到 60px 宽（封面 80px）+ 单行书名 + 进度细条，
+     整卡约 126px——比最早的 176 矮一截，但书封仍是主角。 */
   if (reading.length) {
     html += '<div class="sec-head"><div class="sec-t">在读</div>' +
       '<button style="color:var(--blue);font-size:14px" data-act="tab" data-id="library">全部</button></div>';
-    html += '<div class="card">' + reading.slice(0, 2).map(b => {
+    html += '<div class="card"><div class="rail sm">' + reading.map(b => {
       const pr = Math.max(0, Math.min(100, Number(b.progress) || 0));
-      const sub = [b.author || '', pr > 0 ? pr + '%' : ''].filter(Boolean).join(' · ');
-      return '<div class="lrow bookrow" data-act="openbook" data-id="' + b.id + '">' + bookCover(b, 'xs') +
-        '<div class="lbody"><div class="lrow-t">' + esc(b.title) + '</div>' +
-        '<div class="lrow-sub">' + esc(sub || '在读') + '</div></div>' +
-        '<div class="chev">' + icon('chev', 15) + '</div></div>';
-    }).join('') + '</div>';
+      return '<div class="bk" data-act="openbook" data-id="' + b.id + '">' + bookCover(b) +
+        '<div class="bk-t">' + esc(b.title) + '</div>' +
+        (pr > 0 ? '<div class="bk-prog"><i style="width:' + pr + '%"></i></div>' : '') + '</div>';
+    }).join('') + '</div></div>';
   }
 
   if (S.activities.length) {
@@ -2990,11 +2988,13 @@ async function enterApp(session) {
 /* iOS 大标题：滚动后收起为内联标题，导航栏才出现材质与滚动边缘分隔 */
 /* 横排打卡条：只在不溢出时才不该有渐隐提示，所以每次重绘/滚动后重算 */
 function syncStripFade() {
-  const el = $('.habit-strip');
-  if (!el) return;
-  const over = el.scrollWidth - el.clientWidth > 4;
-  el.classList.toggle('scrollable', over);
-  el.classList.toggle('at-end', over && el.scrollLeft + el.clientWidth >= el.scrollWidth - 4);
+  /* 横向滚动区统一处理：打卡胶囊、在读封面。溢出时右缘渐隐提示"还能滑"，
+     滑到末尾撤掉，避免最后一项被虚化。 */
+  $$('.habit-strip, .rail.sm').forEach(el => {
+    const over = el.scrollWidth - el.clientWidth > 4;
+    el.classList.toggle('scrollable', over);
+    el.classList.toggle('at-end', over && el.scrollLeft + el.clientWidth >= el.scrollWidth - 4);
+  });
 }
 
 /* 顶栏与书架吸顶工具条的材质开关：重绘后也要重算，否则停在半途会丢材质 */
@@ -3013,7 +3013,7 @@ function initNavScroll() {
   }, { passive: true });
   window.addEventListener('resize', syncStickyBars, { passive: true });
   document.addEventListener('scroll', function (e) {
-    if (e.target && e.target.classList && e.target.classList.contains('habit-strip')) syncStripFade();
+    if (e.target && e.target.classList && (e.target.classList.contains('habit-strip') || e.target.classList.contains('rail'))) syncStripFade();
   }, true);
   syncStickyBars();
 }
