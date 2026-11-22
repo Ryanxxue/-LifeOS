@@ -93,14 +93,16 @@ svg{display:block}
 
 .content{max-width:760px;margin:0 auto;padding:0 16px calc(96px + var(--safe-b))}
 /* 页面标题统一放在顶栏（与右侧操作同一行），内容区只留一行汇总副标题 */
-.head{padding:10px 0 12px}
+.head{padding:8px 0 0}
 .head .date{color:var(--text-3);font-size:12px;letter-spacing:.03em;margin-bottom:0}
 .head h2{display:none}
 
 .card{background:var(--card);border-radius:var(--r);overflow:hidden}
-.gtitle{font-size:12.5px;color:var(--text-3);margin:24px 4px 8px;font-weight:500;letter-spacing:.02em}
+/* 分组标题：上下间距是页面的垂直节奏基准。20/8 而非 24/8——标题本身 12.5px 已经
+   很轻，靠间距分组就够了，拉太开会把四栏推成一长条。 */
+.gtitle{font-size:12.5px;color:var(--text-3);margin:20px 4px 8px;font-weight:500;letter-spacing:.02em}
 .gnum{font-size:12px;color:var(--text-3);font-weight:400;margin-left:7px;letter-spacing:0}
-.gfoot{font-size:12px;color:var(--text-3);margin:8px 4px 0;line-height:1.5}
+.gfoot{font-size:12px;color:var(--text-3);margin:6px 4px 0;line-height:1.45}
 
 /* ---------- 今日 ---------- */
 .ring{position:relative;width:78px;height:78px;flex:none}
@@ -109,13 +111,18 @@ svg{display:block}
 .ring .val b{font-size:21px;font-weight:500;letter-spacing:-.02em}
 .ring .val i{font-size:10.5px;color:var(--text-2);font-style:normal;margin-top:1px}
 
-.health{display:grid;grid-template-columns:repeat(3,1fr);gap:0;background:var(--card);border-radius:var(--r);margin-top:12px;overflow:hidden}
-.hcell{padding:12px 8px;text-align:center;border-right:.5px solid var(--sep)}
+/* 三格状态条：高度由 11(标签)+2+数值+幅度 决定，padding 收到 10 才和三行文字相称；
+   margin-top:0 让它跟其它卡片一样贴着分组标题 8px（.gtitle 的 margin-bottom）。 */
+.health{display:grid;grid-template-columns:repeat(3,1fr);gap:0;background:var(--card);border-radius:var(--r);margin-top:0;overflow:hidden}
+.hcell{padding:10px 8px;text-align:center;border-right:.5px solid var(--sep)}
 .hcell:last-child{border-right:0}
-.hcell .k{font-size:11px;color:var(--text-2);margin-bottom:3px;white-space:nowrap}
-.hcell .v{font-size:17px;font-weight:500;letter-spacing:-.02em;white-space:nowrap}
+.hcell .k{font-size:11px;color:var(--text-2);margin-bottom:2px;white-space:nowrap}
+.hcell .v{font-size:17px;font-weight:500;letter-spacing:-.02em;white-space:nowrap;line-height:1.2}
 .hcell .u{font-size:10.5px;color:var(--text-3);font-weight:400;margin-left:1px}
-.hcell.empty .v{color:var(--text-3);font-size:14px;font-weight:400}
+/* 缺值格用 .nil，别复用页面级 .empty（.empty 是 36px padding 的空状态块，
+   复用会把整条状态栏顶到 117px，三格高度全被这一格带偏） */
+.hcell.nil{padding:10px 8px}
+.hcell.nil .v{color:var(--text-3);font-size:14px;font-weight:400}
 
 /* 列表行 */
 .lrow{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:.5px solid var(--sep);background:var(--card);cursor:pointer}
@@ -134,23 +141,28 @@ svg{display:block}
 .addrow:active{background:var(--fill)}
 
 /* ---------- 今日打卡：横排紧凑条 ----------
-   纵向列表是「一项 57px」，5 项就 280px；横排后固定约 90px，习惯多了横向滑动。
+   纵向列表是「一项 57px」，5 项就 280px；横排后固定约 82px，习惯多了横向滑动。
    圆点未完成＝习惯色淡底 + 彩色图标，完成＝实色 + 右下角绿色勾（.chk 用绝对定位
-   贴在圆点内，patchCheckinUI 仍能用同一个选择器做局部更新）。 */
+   贴在圆点内，patchCheckinUI 仍能用同一个选择器做局部更新）。
+   44 而不是 46：44+5+一行 11.5px 标签 ≈ 65，配上 10/8 内边距正好 82，
+   与上方状态条（70 出头）和下方回顾条（44）形成递减的节奏。 */
 .stripcard{padding:0}
-.habit-strip{display:flex;gap:6px;overflow-x:auto;padding:12px 10px 10px;
+.habit-strip{display:flex;gap:6px;overflow-x:auto;padding:10px 10px 8px;
   scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
 .habit-strip::-webkit-scrollbar{display:none}
 /* 习惯多到放不下时，右缘渐隐暗示可横向滑动；滑到末尾就撤掉，避免最后一项被虚化 */
 .habit-strip.scrollable{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 26px),transparent);
   mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 26px),transparent)}
 .habit-strip.scrollable.at-end{-webkit-mask-image:none;mask-image:none}
-.lrow.chip{flex:1 0 62px;min-width:0;max-width:96px;flex-direction:column;align-items:center;gap:6px;
-  padding:0 2px 2px;border-bottom:0;background:transparent;border-radius:10px;
+/* flex:1 1 0 + min-width：少几项时按「剩余空间均分」把整条铺满（不再在右端留空白），
+   项多了缩到 62 就停、自然横向滚动。basis 必须是 0 而不是 auto——auto 会让长习惯名
+   把那一格撑宽（165/165/189），一排格子就不齐了。 */
+.lrow.chip{flex:1 1 0;min-width:62px;flex-direction:column;align-items:center;gap:5px;
+  padding:0 4px 1px;border-bottom:0;background:transparent;border-radius:10px;
   scroll-snap-align:start}
 .card .lrow.chip:not(:last-child)::after{display:none}
 html[data-glass="on"] .lrow.chip:active{background-color:transparent}
-.lrow.chip .licon{width:46px;height:46px;border-radius:50%;position:relative;
+.lrow.chip .licon{width:44px;height:44px;border-radius:50%;position:relative;
   transition:background .18s ease,color .18s ease,transform .22s cubic-bezier(.32,.72,0,1)}
 .lrow.chip:active .licon{transform:scale(.92)}
 .lrow.chip .lbody{width:100%;text-align:center}
@@ -162,30 +174,35 @@ html[data-glass="on"] .lrow.chip:active{background-color:transparent}
 .lrow.chip .chk.on{opacity:1;transform:scale(1);background:var(--green);
   box-shadow:0 0 0 2px var(--card),0 1px 4px rgba(0,0,0,.28)}
 .lrow.chip.pending .licon{box-shadow:0 0 0 2px var(--orange)}
-.hchip-add{flex:0 0 62px;display:flex;flex-direction:column;align-items:center;gap:6px;
-  padding:0 2px 2px;cursor:pointer;color:var(--text-3);border-radius:10px}
-.hchip-add .ha{width:46px;height:46px;border-radius:50%;border:1.5px dashed var(--fill-3);
+/* 新建格与习惯格同规则伸缩：否则 3 项时前三格被均分撑到 111，「新建」还卡在 62，
+   右端会突然收窄，一眼看出没对齐 */
+.hchip-add{flex:1 0 auto;min-width:62px;display:flex;flex-direction:column;align-items:center;gap:5px;
+  padding:0 4px 1px;cursor:pointer;color:var(--text-3);border-radius:10px}
+.hchip-add .ha{width:44px;height:44px;border-radius:50%;border:1.5px dashed var(--fill-3);
   display:grid;place-items:center;transition:transform .2s,color .2s,border-color .2s}
 .hchip-add:active .ha{transform:scale(.92);border-color:var(--blue);color:var(--blue)}
 .hchip-add .ha-t{font-size:11.5px;line-height:1.25}
 
 /* 在读 */
-.rail{display:flex;gap:13px;overflow-x:auto;padding:14px;scrollbar-width:none}
+/* 在读：封面横滑。这是首页最高的一栏，高度完全由封面（宽×4.35/3）决定，
+   所以宽度从 86 收到 78（封面 113px），配上 12px 内边距整卡约 174——
+   比原来矮 21px，又保住封面能看清书名的尺寸。 */
+.rail{display:flex;gap:12px;overflow-x:auto;padding:12px;scrollbar-width:none}
 .rail::-webkit-scrollbar{display:none}
-.bk{width:86px;flex:none;cursor:pointer}
+.bk{width:78px;flex:none;cursor:pointer}
 .bk:active{transform:scale(.97)}
 .bk-cover{position:relative;width:100%;aspect-ratio:3/4.35;border-radius:4px;overflow:hidden;
   box-shadow:0 4px 12px rgba(0,0,0,.42),0 0 0 .5px rgba(255,255,255,.10);
-  display:flex;align-items:flex-start;padding:12px 10px}
-.bk-cover span{font-size:11.5px;line-height:1.25;color:#fff;font-weight:500;
+  display:flex;align-items:flex-start;padding:11px 9px}
+.bk-cover span{font-size:11px;line-height:1.25;color:#fff;font-weight:500;
   text-shadow:0 1px 3px rgba(0,0,0,.35);display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .bk-cover::after{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;
   background:linear-gradient(90deg,rgba(0,0,0,.30),transparent)}
 /* 书籍详情里的大封面：此前 .lg 没有任何样式，封面会撑满整行把标题挤成一列竖排 */
 .bk-cover.lg{width:96px;flex:none;border-radius:8px;padding:14px 11px}
 .bk-cover.lg span{font-size:13px;line-height:1.3;-webkit-line-clamp:5}
-.bk-t{font-size:12.5px;margin-top:7px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.bk-a{font-size:11px;color:var(--text-3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bk-t{font-size:12px;margin-top:6px;line-height:1.28;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.bk-a{font-size:10.5px;color:var(--text-3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* 分段控件 */
 .seg{display:flex;background:var(--fill);border-radius:12px;padding:3px;margin:0 0 12px}
@@ -410,8 +427,8 @@ html[data-glass="on"] .lrow.chip:active{background-color:transparent}
 .sparkcard .sh{display:flex;justify-content:space-between;font-size:12.5px;color:var(--text-2);margin-bottom:8px}
 .sparkline{display:block;width:100%;height:24px}
 /* 本周回顾：紧跟在身体数据脚注之后，与相邻卡片保持 12px 间距 */
-.review{background:var(--card);border-radius:var(--r);margin:12px 0 0;overflow:hidden}
-.review summary{list-style:none;padding:12px 14px;font-size:14px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:space-between}
+.review{background:var(--card);border-radius:var(--r);margin:10px 0 0;overflow:hidden}
+.review summary{list-style:none;padding:11px 14px;font-size:14px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:space-between}
 .review summary::-webkit-details-marker{display:none}
 .review summary .rs{font-size:11.5px;color:var(--text-3);font-weight:400}
 .review-body{border-top:.5px solid var(--sep);padding:6px 14px 12px}

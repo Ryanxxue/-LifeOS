@@ -1493,7 +1493,7 @@ function healthCells(day) {
       dh = '<div class="hdelta ' + (Math.abs(d.rel) < 0.08 ? '' : (good ? 'good' : 'warn')) + '">' +
         (Math.abs(d.rel) < 0.08 ? '≈ 常态' : (up ? '↑ ' : '↓ ') + abs) + '</div>';
     } else if (d) dh = '<div class="hdelta">基线数据不足</div>';
-    return '<div class="hcell' + (c.v === '—' ? ' empty' : '') + '" data-act="healthdetail" data-id="' + c.f + '" ' +
+    return '<div class="hcell' + (c.v === '—' ? ' nil' : '') + '" data-act="healthdetail" data-id="' + c.f + '" ' +
       'role="button" tabindex="0" aria-label="' + c.k + ' ' + c.v + c.u + '">' +
       '<div class="k">' + c.k + '</div>' +
       '<div class="v">' + c.v + (c.u && c.v !== '—' ? '<span class="u">' + c.u + '</span>' : '') + '</div>' + dh + '</div>';
