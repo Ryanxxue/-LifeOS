@@ -834,6 +834,31 @@ TEST = r'''
        localStorage.getItem('lifeboard.glass') === 'on');
     goTab('today'); await tick();
 
+    /* --- 今日打卡：横排紧凑条 --- */
+    const chips = document.querySelectorAll('#view-today .habit-strip .lrow.chip');
+    const strip = q1('#view-today .habit-strip');
+    ok('今日打卡：正常态是一行横排圆点（含新建入口），不再是纵向列表',
+       chips.length >= 1 && !!q1('#view-today .hchip-add') && !!q1('#view-today .stripcard') &&
+       strip.getBoundingClientRect().height < 120);
+    const cw = Array.prototype.map.call(chips, c => Math.round(c.getBoundingClientRect().width));
+    ok('今日打卡：长习惯名不会把某一格撑宽（宽度一致）',
+       cw.length >= 2 && Math.max.apply(null, cw) - Math.min.apply(null, cw) <= 2,
+       'widths=' + cw.join(','));
+    const chip0 = chips[0];
+    const colBefore = chip0 ? chip0.querySelector('.licon').style.background : '';
+    if (chip0) { chip0.click(); await sleep(150); }
+    const chipAfter = q1('#view-today .habit-strip .lrow.chip');
+    /* 圆点状态要能即时翻转：完成＝实色＋勾，未完成＝淡色无勾，与 .done 严格对应 */
+    ok('今日打卡：点一下圆点即时翻转（实色+勾 ↔ 淡色无勾），无需刷新',
+       !!chipAfter && chipAfter.querySelector('.licon').style.background !== colBefore &&
+       (!!chipAfter.querySelector('.chk.on')) === chipAfter.classList.contains('done'),
+       'before=' + colBefore + ' after=' + (chipAfter ? chipAfter.querySelector('.licon').style.background : 'null'));
+    if (chipAfter) { chipAfter.click(); await sleep(150); }
+    q1('#view-today [data-act="edittoggle"]').click(); await tick();
+    ok('今日打卡：编辑态回到纵向列表并露出删除按钮',
+       !q1('#view-today .habit-strip') && !!q1('#view-today .card .lrow .minus'));
+    q1('#view-today [data-act="edittoggle"]').click(); await tick();
+
     /* --- 本轮：今日提示 / 运动图标 / 微信读书 API 同步 --- */
     const savedTodayHealth = S.health[dayAt(0)];
     delete S.health[dayAt(0)];

@@ -136,6 +136,42 @@ svg{display:block}
 .addrow{display:flex;align-items:center;gap:10px;padding:12px 14px;color:var(--blue);font-size:15px;cursor:pointer;background:var(--card)}
 .addrow:active{background:var(--fill)}
 
+/* ---------- 今日打卡：横排紧凑条 ----------
+   纵向列表是「一项 57px」，5 项就 280px；横排后固定约 90px，习惯多了横向滑动。
+   圆点未完成＝习惯色淡底 + 彩色图标，完成＝实色 + 右下角绿色勾（.chk 用绝对定位
+   贴在圆点内，patchCheckinUI 仍能用同一个选择器做局部更新）。 */
+.stripcard{padding:0}
+.habit-strip{display:flex;gap:6px;overflow-x:auto;padding:12px 10px 10px;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+.habit-strip::-webkit-scrollbar{display:none}
+/* 习惯多到放不下时，右缘渐隐暗示可横向滑动；滑到末尾就撤掉，避免最后一项被虚化 */
+.habit-strip.scrollable{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 26px),transparent);
+  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 26px),transparent)}
+.habit-strip.scrollable.at-end{-webkit-mask-image:none;mask-image:none}
+.lrow.chip{flex:1 0 62px;min-width:0;max-width:96px;flex-direction:column;align-items:center;gap:6px;
+  padding:0 2px 2px;border-bottom:0;background:transparent;border-radius:10px;
+  scroll-snap-align:start}
+.card .lrow.chip:not(:last-child)::after{display:none}
+html[data-glass="on"] .lrow.chip:active{background-color:transparent}
+.lrow.chip .licon{width:46px;height:46px;border-radius:50%;position:relative;
+  transition:background .18s ease,color .18s ease,transform .22s cubic-bezier(.32,.72,0,1)}
+.lrow.chip:active .licon{transform:scale(.92)}
+.lrow.chip .lbody{width:100%;text-align:center}
+.lrow.chip .lrow-t{font-size:11.5px;line-height:1.25;color:var(--text)}
+.lrow.chip .lrow-sub{display:none}
+.lrow.chip .chk{position:absolute;right:-3px;bottom:-3px;width:18px;height:18px;
+  display:grid;place-items:center;background:transparent;border:0;
+  opacity:0;transform:scale(.4);transition:opacity .16s,transform .2s cubic-bezier(.32,.72,0,1)}
+.lrow.chip .chk.on{opacity:1;transform:scale(1);background:var(--green);
+  box-shadow:0 0 0 2px var(--card),0 1px 4px rgba(0,0,0,.28)}
+.lrow.chip.pending .licon{box-shadow:0 0 0 2px var(--orange)}
+.hchip-add{flex:0 0 62px;display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:0 2px 2px;cursor:pointer;color:var(--text-3);border-radius:10px}
+.hchip-add .ha{width:46px;height:46px;border-radius:50%;border:1.5px dashed var(--fill-3);
+  display:grid;place-items:center;transition:transform .2s,color .2s,border-color .2s}
+.hchip-add:active .ha{transform:scale(.92);border-color:var(--blue);color:var(--blue)}
+.hchip-add .ha-t{font-size:11.5px;line-height:1.25}
+
 /* 在读 */
 .rail{display:flex;gap:13px;overflow-x:auto;padding:14px;scrollbar-width:none}
 .rail::-webkit-scrollbar{display:none}

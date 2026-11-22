@@ -1313,7 +1313,18 @@ function patchCheckinUI(habitId, day, actName) {
     const on = isDone(habitId, day);
     row.classList.toggle('done', on);
     const chk = row.querySelector('.chk');
-    if (chk) { chk.classList.toggle('on', on); chk.innerHTML = on ? icon('check', 15) : ''; }
+    if (chk) {
+      chk.classList.toggle('on', on);
+      chk.innerHTML = on ? icon('check', row.classList.contains('chip') ? 11 : 15) : '';
+    }
+    /* 横排项的内联色要跟着切：未完成淡底彩图标、完成实色白图标 */
+    const licon = row.querySelector('.licon');
+    if (licon && row.classList.contains('chip')) {
+      const hb = S.habits.find(x => String(x.id) === String(habitId));
+      const col = (hb && hb.color) || '#0A84FF';
+      licon.style.background = on ? col : tint(col, 0.16);
+      licon.style.color = on ? '#fff' : col;
+    }
     if (row.hasAttribute('aria-checked')) {
       row.setAttribute('aria-checked', on ? 'true' : 'false');
       const nm = row.querySelector('.lrow-t');
@@ -1519,6 +1530,34 @@ function sparkCardHTML(field) {
     sparkSVG(vals, field === 'hrv' ? 'var(--green)' : 'var(--blue)') + '</div>';
 }
 
+/* 把 #RRGGBB 转成带透明度的 rgba：横排打卡的未完成态用「淡色底 + 彩色图标」，
+   比实色圆更轻，也不会让一排圆点抢走完成度环的注意力。非 hex 原样返回。 */
+function tint(hex, alpha) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex == null ? '' : hex).trim());
+  if (!m) return hex || 'var(--fill-3)';
+  const n = parseInt(m[1], 16);
+  return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
+}
+
+/* 横排紧凑打卡项：一个圆 + 名称，一屏能放下 5–6 项。
+   刻意沿用 .lrow / .licon / .chk / .lrow-t 这套类名——patchCheckinUI 靠它们做
+   局部更新（打卡后只改这一格的 class 与内联色，不重绘整页，滚动位置才不丢）。 */
+function habitChip(h, day, actName) {
+  const on = isDone(h.id, day);
+  const pend = pendingOf(h.id, day) !== undefined;
+  const col = h.color || '#0A84FF';
+  const a11y = ' role="checkbox" tabindex="0" aria-checked="' + (on ? 'true' : 'false') +
+    '" aria-label="' + esc(h.name + '，' + (on ? '已完成' : '未完成')) + '"';
+  return '<div class="lrow chip' + (on ? ' done' : '') + (pend ? ' pending' : '') +
+    '" data-act="' + actName + '" data-id="' + h.id + '" data-day="' + day + '"' + a11y + '>' +
+    '<div class="licon" style="background:' + esc(on ? col : tint(col, 0.16)) +
+    ';color:' + esc(on ? '#fff' : col) + '">' + icon(h.icon || 'circle', 20) +
+    '<div class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 11) : '') + '</div></div>' +
+    '<div class="lbody"><div class="lrow-t">' + esc(h.name) + '</div>' +
+    '<div class="lrow-sub">' + esc(h.target || '每天') + (pend ? ' · 待同步' : '') + '</div></div>' +
+    '</div>';
+}
+
 function habitRow(h, day, editing, actName) {
   const on = isDone(h.id, day);
   /* 打卡是核心动作，必须能被键盘与读屏操作；编辑态下父行不可打卡，不再放进 Tab 序列 */
@@ -1560,9 +1599,16 @@ function renderToday() {
   if (!total) {
     html += '<div class="card"><div class="empty">还没有打卡项。<br>点下方新建一个，或到「我的 → 打卡项管理」添加。</div>' +
       '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div></div>';
+  } else if (S.editing) {
+    /* 编辑态保留纵向列表：删除按钮需要整行宽度，横向圆点放不下 */
+    html += '<div class="card">' + habitsForDay(day).map(x => habitRow(x, day, true, 'toggle')).join('') + '</div>';
   } else {
-    html += '<div class="card">' + habitsForDay(day).map(x => habitRow(x, day, S.editing, 'toggle')).join('') +
-      (S.editing ? '' : '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div>') + '</div>';
+    /* 正常态：横向一排，高度从「行数×57px」压到固定约 94px，习惯多了横向滑动 */
+    html += '<div class="card stripcard"><div class="habit-strip">' +
+      habitsForDay(day).map(x => habitChip(x, day, 'toggle')).join('') +
+      '<div class="hchip-add" data-act="newhabit" role="button" tabindex="0" aria-label="新建打卡项">' +
+        '<div class="ha">' + icon('plus', 19) + '</div><div class="ha-t">新建</div></div>' +
+      '</div></div>';
   }
 
   /* 洞察卡已移除：一句话结论容易被当成「健康建议」误读，且它会随基线漂移
@@ -2212,6 +2258,7 @@ function render() {
     if (again && again.focus) { try { again.focus({ preventScroll: true }); } catch (e) {} }
   }
   syncStickyBars();
+  syncStripFade();
 }
 
 function go(view) {
@@ -2905,6 +2952,15 @@ async function enterApp(session) {
 }
 
 /* iOS 大标题：滚动后收起为内联标题，导航栏才出现材质与滚动边缘分隔 */
+/* 横排打卡条：只在不溢出时才不该有渐隐提示，所以每次重绘/滚动后重算 */
+function syncStripFade() {
+  const el = $('.habit-strip');
+  if (!el) return;
+  const over = el.scrollWidth - el.clientWidth > 4;
+  el.classList.toggle('scrollable', over);
+  el.classList.toggle('at-end', over && el.scrollLeft + el.clientWidth >= el.scrollWidth - 4);
+}
+
 /* 顶栏与书架吸顶工具条的材质开关：重绘后也要重算，否则停在半途会丢材质 */
 function syncStickyBars() {
   const nav = $('.navbar');
@@ -2920,6 +2976,9 @@ function initNavScroll() {
     if (!queued) { queued = true; requestAnimationFrame(function () { syncStickyBars(); queued = false; }); }
   }, { passive: true });
   window.addEventListener('resize', syncStickyBars, { passive: true });
+  document.addEventListener('scroll', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('habit-strip')) syncStripFade();
+  }, true);
   syncStickyBars();
 }
 
@@ -3225,7 +3284,7 @@ window.LifeApp = {
   patchCheckinUI: patchCheckinUI, chartSVG: chartSVG, reviewHTML: reviewHTML,
   persistSession: persistSession, restoreSession: restoreSession,
   applyGlass: applyGlass, toggleGlass: toggleGlass, glassOn: glassOn, initGlassLight: initGlassLight,
-  initNavScroll: initNavScroll, syncStickyBars: syncStickyBars, autoRefreshToday: autoRefreshToday,
+  initNavScroll: initNavScroll, syncStickyBars: syncStickyBars, syncStripFade: syncStripFade, autoRefreshToday: autoRefreshToday,
   flushPending: flushPending, findRowId: findRowId, draftGet: draftGet, draftClear: draftClear,
   loadWereadState: loadWereadState, openWereadSyncSheet: openWereadSyncSheet,
   applyShelf: applyShelf, wereadStatusText: wereadStatusText
