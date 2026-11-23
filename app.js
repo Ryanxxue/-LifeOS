@@ -286,6 +286,7 @@ const S = {
   snapshotAt: null,
   ownerId: null,          // 从云端读回的真实 owner，用于校验写入身份
   loadWarnings: 0,        // 本次加载失败的表数量
+  loadFailed: [],         // 本次读取失败的表名（界面上要说清是哪块没更新）
   lastWriteError: null,   // 最近一次写入失败，「我的 → 数据健康」可见
   pending: {},            // 离线打卡队列：'day|habitId' -> 目标状态 true/false
   limitHit: false,        // 是否有表触达加载上限
@@ -373,6 +374,19 @@ function saveSnapshot() {
     S.snapshotAt = at;
   } catch (e) {}
 }
+/* 写入成功后也要刷新快照。
+   只靠「加载成功时保存一次」是不够的：只要某次加载失败，界面就会回退到快照，
+   刚写进去的内容看起来就像没保存（新增的打卡项消失、删掉的又回来）。
+   这里让快照尽量等于「界面此刻显示的内容」，代价是一次防抖后的 localStorage 写入。
+   没有成功加载做基底时（S.snapshotAt 为空）不写，避免用半成品覆盖掉可用的快照。 */
+let snapSoonTimer = null;
+function saveSnapshotSoon() {
+  if (!S.snapshotAt || snapSoonTimer) return;
+  snapSoonTimer = setTimeout(function () {
+    snapSoonTimer = null;
+    saveSnapshot();
+  }, 400);
+}
 function readSnapshot() {
   try {
     const o = JSON.parse(localStorage.getItem(SNAP_KEY) || 'null');
@@ -447,6 +461,13 @@ const normRows = rows => (rows || []).map(normRow);
 /* 书架/划线/运动设上限：个人库足够用，避免无界增长把首屏拖慢；完整数据仍可全量导出。
    checkins 不设上限而是分页取全 —— 它决定历史完成率与热力图，缺行会直接算错。 */
 const LOAD_LIMITS = { books: 1000, notes: 3000, activities: 200, checkins: 6000 };
+/* loadAll 里 Promise.allSettled 的顺序，用来把失败项翻译成表名 */
+const LOAD_TABLES = ['habits', 'checkins', 'health_daily', 'activities',
+                     'books', 'notes', 'study_plans', 'study_logs'];
+/* 表名 → 界面上对用户有意义的叫法，用于「哪块数据没更新」的提示 */
+const LOAD_LABELS = { habits: '打卡项', checkins: '打卡记录', health_daily: '身体数据',
+                      activities: '运动记录', books: '书架', notes: '划线',
+                      study_plans: '学习计划', study_logs: '学习记录' };
 const PAGE_SIZE = 500;
 /* 分页取全：服务端可能对单次响应设了行数上限，一次 select 拿不全就会被静默截断。
    每页用 range 取，取到不足一页即认为到底；累计到 cap 仍未到底则标记 truncated。 */
@@ -482,6 +503,12 @@ async function loadAll() {
   const at = i => rs[i].status === 'fulfilled' ? (rs[i].value || null) : null;
   const ckResEarly = at(1);
   const failed = rs.filter(r => r.status === 'rejected').length + (ckResEarly && ckResEarly.error ? 1 : 0);
+  /* 记下具体是哪几张表没读到：界面要明确告诉用户「打卡项没更新」，
+     而不是让他面对一份看起来正常、其实是旧缓存的数据。 */
+  S.loadFailed = rs.map((r, i) => {
+    const bad = r.status === 'rejected' || (i === 1 && ckResEarly && ckResEarly.error);
+    return bad ? LOAD_TABLES[i] : null;
+  }).filter(Boolean);
   if (failed >= rs.length) {
     const firstRej = rs.find(r => r.status === 'rejected');
     throw ((ckResEarly && ckResEarly.error) || (firstRej && firstRej.reason) || new Error('数据加载失败'));
@@ -599,6 +626,8 @@ async function toggleCheckin(habitId, day, skipRender) {
     }
     if (!skipRender) render();
   }
+  /* 打卡走 patchCheckinUI 局部刷新，不会触发 render，这里补一次快照刷新 */
+  saveSnapshotSoon();
 }
 
 async function saveHabit(payload, id) {
@@ -1286,15 +1315,36 @@ function dataHealth() {
     deleted: recentDeleted().length, snapshotAt: S.snapshotAt
   };
 }
+/* 快照新鲜度 / 数据不完整提示。
+   只要有一张表没读到、或处于离线模式，界面显示的就是本机缓存 —— 必须一直说出来。
+   以前只在「我的」里一行小字加 6 秒 toast，用户看到的现象是「新增/删除后刷新又变回原样」，
+   却找不到原因。 */
+function snapAgeText() {
+  if (!S.snapshotAt) return '';
+  const mins = Math.floor((Date.now() - new Date(S.snapshotAt).getTime()) / 60000);
+  if (!isFinite(mins) || mins < 1) return '刚刚';
+  if (mins < 60) return mins + ' 分钟前';
+  if (mins < 1440) return Math.floor(mins / 60) + ' 小时前';
+  return Math.floor(mins / 1440) + ' 天前';
+}
 function renderFreshness() {
   const el = $('#fresh-bar'); if (!el) return;
-  if (S.offline || !S.snapshotAt) { el.hidden = true; return; }
-  const mins = Math.floor((Date.now() - new Date(S.snapshotAt).getTime()) / 60000);
-  if (mins < 60 || !isFinite(mins)) { el.hidden = true; return; }
+  const age = snapAgeText();
+  const broken = (S.loadFailed || []).map(t => LOAD_LABELS[t] || t);
+  let msg = '';
+  if (broken.length) {
+    msg = broken.join('、') + ' 未更新 · 当前显示本机缓存' +
+      (age ? '（更新于 ' + age + '）' : '') + ' · 下拉刷新重试';
+  } else if (S.offline) {
+    msg = '离线模式 · 显示本机缓存' + (age ? '（更新于 ' + age + '）' : '');
+  } else if (S.snapshotAt) {
+    const mins = Math.floor((Date.now() - new Date(S.snapshotAt).getTime()) / 60000);
+    if (isFinite(mins) && mins >= 60) msg = '数据更新于 ' + age + ' · 重新打开可刷新';
+  }
+  if (!msg) { el.hidden = true; return; }
   el.hidden = false;
-  el.textContent = mins < 1440
-    ? '数据更新于 ' + Math.floor(mins / 60) + ' 小时前 · 重新打开可刷新'
-    : '数据更新于 ' + Math.floor(mins / 1440) + ' 天前 · 建议重新同步';
+  el.textContent = msg;
+  el.style.color = broken.length ? 'var(--orange)' : '';
 }
 /* 打卡只更新被点的行与今日环形，不再整页重绘；失败回滚走 toggleCheckin 内的全量 render */
 function patchCheckinUI(habitId, day, actName) {
@@ -2129,7 +2179,9 @@ function renderMe() {
     (S.ownerId ? '<div class="dh-row"><span class="dk">数据账号</span><span class="dv">' +
       esc(S.ownerId.length > 16 ? S.ownerId.slice(0, 8) + '…' + S.ownerId.slice(-4) : S.ownerId) + '</span></div>' : '') +
     (S.loadWarnings ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">本次有 ' +
-      S.loadWarnings + ' 张表读取失败，显示的是上一次缓存</div>' : '') +
+      S.loadWarnings + ' 张表读取失败（' +
+      esc((S.loadFailed || []).map(t => LOAD_LABELS[t] || t).join('、')) +
+      '），这几块显示的是上一次缓存</div>' : '') +
     (S.lastWriteError ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">' +
       esc(S.lastWriteError.at.slice(5, 16).replace('T', ' ')) + ' · ' + esc(S.lastWriteError.act) +
       ' · ' + esc(S.lastWriteError.message) + '</div>' : '') +
@@ -2235,6 +2287,9 @@ function render() {
   }
   syncStickyBars();
   syncStripFade();
+  /* 每次重绘后（写操作都会走到这里）把界面状态刷进快照，
+     这样即使下次加载失败回退到快照，看到的也是刚写入的结果而不是旧数据。 */
+  saveSnapshotSoon();
 }
 
 function go(view) {
@@ -3251,7 +3306,7 @@ window.LifeApp = {
   clearLocalData: clearLocalData, refreshAll: refreshAll, selectPaged: selectPaged,
   syncCorosDaily: syncCorosDaily, corosAutoDoneToday: corosAutoDoneToday,
   snapshotOfOtherUser: function () { return snapMismatch; },
-  readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,
+  readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, saveSnapshotSoon: saveSnapshotSoon, installSW: installSW,
   sportKind: sportKind, sportIcon: sportIcon, baselineOf: baselineOf,
   fieldDelta: fieldDelta, sparkSVG: sparkSVG, cmpHTML: cmpHTML, avgMetric: avgMetric,
   weekReview: weekReview, factorInsights: factorInsights, dataHealth: dataHealth,

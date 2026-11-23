@@ -551,6 +551,16 @@ TEST = r'''
     ok('写入：重新拉取云端数据后新项仍然存在',
        S.habits.some(h => h.name === '回归测试待办') && !S.offline);
 
+    /* 写成功后本机快照必须跟着更新：否则下一次加载失败回退到快照时，
+       刚新增的打卡项会“消失”、刚删除的会“回来”，表现为「刷新就变回原样」。 */
+    await new Promise(r => setTimeout(r, 700));
+    const snapAfterWrite = window.LifeApp.readSnapshot();
+    ok('写入：写成功后本机快照同步更新',
+       !!snapAfterWrite && Array.isArray(snapAfterWrite.data.habits) &&
+       snapAfterWrite.data.habits.some(h => h.name === '回归测试待办'),
+       'snapHabits=' + (snapAfterWrite && snapAfterWrite.data.habits
+         ? snapAfterWrite.data.habits.map(h => h.name).join(',') : 'null'));
+
     /* 云端把 INSERT 落到 owner_id='anon' 时必须报错，不能显示「已添加」 */
     window.__MOCK__.forceOwner = 'anon';
     const hCount1 = S.habits.length;
@@ -601,6 +611,22 @@ TEST = r'''
        !loadThrew && !S.offline && S.loadWarnings === 1 && S.books.length === booksBefore,
        'warnings=' + S.loadWarnings + ' books=' + S.books.length);
     window.__MOCK__.failTable = null;
+
+    /* 打卡项这一张表读不到时，首页必须指名说清「哪块没更新」，
+       不能让用户面对一份看起来正常、其实是本机缓存的数据。 */
+    window.__MOCK__.failTable = 'habits';
+    await window.LifeApp.loadAll();
+    window.LifeApp.render(); await tick();
+    ok('加载：打卡项读取失败时首页常驻提示并指名',
+       !q1('#fresh-bar').hidden && /打卡项/.test(q1('#fresh-bar').textContent) &&
+       (S.loadFailed || []).indexOf('habits') >= 0 && S.habits.length > 0,
+       'bar=' + q1('#fresh-bar').textContent);
+    window.__MOCK__.failTable = null;
+    await window.LifeApp.loadAll();
+    window.LifeApp.render(); await tick();
+    ok('加载：恢复后不再显示未更新提示',
+       q1('#fresh-bar').hidden || !/未更新/.test(q1('#fresh-bar').textContent),
+       'bar=' + q1('#fresh-bar').textContent);
 
     goMe(); await tick();
     ok('诊断：我的页显示云端写入状态与数据账号',
