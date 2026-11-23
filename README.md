@@ -28,7 +28,7 @@ wbcloud.js          WorkBuddy Cloud SDK（第三方压缩产物，不参与二�
 build.py            构建 + 发布前检查
 db/schema.sql       建表与唯一约束
 db/policies.sql     RLS 策略（只授予 authenticated）
-tests/              三个校验脚本 + 一键脚本 ci.sh
+tests/              四个校验/探测脚本 + 一键脚本 ci.sh
 archive/            早期 demo，不参与构建
 index.html          ← 构建产物，入库，由 build.py 生成
 sw.js               ← 构建产物（版本戳注入）
@@ -123,6 +123,31 @@ sh tests/ci.sh          # 五步串行，任一步跳过都算失败
 ```bash
 LB_BROWSER="/path/to/chrome" python3 tests/regression.py
 ```
+
+### 写入探测（需要登录，不在 ci.sh 里）
+
+`tests/anon_probe.py` 证明"未登录写不进去"，`tests/write_probe.py` 证明"登录后写得进去"。
+后者需要真会话，所以不串进 CI，改完数据层或 RLS 后手动跑一次：
+
+```bash
+python3 tests/write_probe.py --email you@example.com   # 发验证码到邮箱
+python3 tests/write_probe.py --code 123456             # 换会话，然后跑 9 张表
+python3 tests/write_probe.py                           # 复用会话（约 2 小时有效）
+python3 tests/write_probe.py --keep                    # 保留探针数据，到界面上肉眼确认
+```
+
+每张表走一遍 INSERT → SELECT 回读 → PATCH → DELETE，共 37 项检查，并校验 `owner_id`
+不是 `anon`、9 张表是同一个 owner、且等于 JWT 的 `sub`。数据用 `__WRITE_PROBE__` 前缀和
+`2001-01-01` 这种不可能撞车的值，跑完自动清理。会话只落在 `tests/.probe_state.json`（已 gitignore）。
+
+两个会让脚本"看起来在跑、其实没验证"的网关行为，改脚本时别踩：
+
+1. **必须带 `Origin` 头。** 同一个 Bearer 令牌，不带 `Origin` 是 401
+   `the session is invalid, expired or issued for another client`，带上就是 200。
+   浏览器里天然有这一头，脚本里要自己补，否则会把"令牌有效"误判成"登录失效"。
+2. **过滤条件要用 `column=op.value`，不能用 PostgREST 标准的 `column.op.value`。**
+   写成 `name.eq.__WRITE_PROBE__` 会被**静默忽略并返回全表**——不报错，只是过滤没生效，
+   于是"残留为 0"之类的结论会全部失真。
 
 ## 设计约定（都是踩过坑之后的结论）
 

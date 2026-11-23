@@ -2,4 +2,5 @@
 __pycache__/
 *.pyc
 tests/regression.html
+tests/.probe_state.json
 node_modules/
