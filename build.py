@@ -109,8 +109,15 @@ def read(name):
         return f.read()
 
 
+# 本地依赖有两个入口：node_modules/terser/bin/terser 是真正的 node 脚本，可用 `node` 直接
+# 执行；node_modules/.bin/terser 只是包管理器生成的 shim —— Windows 上它是 sh 脚本，
+# subprocess 直接调用会失败并静默回退 npx（离线环境就直接构建失败）。所以优先走前者。
+TERSER_NODE = os.path.join('node_modules', 'terser', 'bin', 'terser')
 TERSER_BIN = os.path.join('node_modules', '.bin', 'terser')
 TERSER_FALLBACK = ['npx', '--yes', 'terser@5.51.2']
+# 管道一律显式按 UTF-8 收发：text=True 默认用系统区域编码（中文 Windows 是 cp936），
+# 源码里的中文注释与界面文案会在压缩时被压成乱码写进产物。
+IO_ENCODING = 'utf-8'
 MINIFY_FAILED = []
 
 
@@ -122,13 +129,16 @@ def minify(code, name):
     300 KB 的未压缩产物「通过」，线上体积与缓存版本号都跟着漂移。
     """
     cmds = []
-    if os.path.exists(TERSER_BIN):
+    if os.path.exists(TERSER_NODE):
+        cmds.append(['node', TERSER_NODE])
+    if os.name != 'nt' and os.path.exists(TERSER_BIN):
         cmds.append([TERSER_BIN])
     cmds.append(TERSER_FALLBACK)
     for base in cmds:
         try:
             r = subprocess.run(base + ['--compress', '--mangle', '--comments', 'false'],
-                               input=code, capture_output=True, text=True, timeout=120)
+                               input=code, capture_output=True, text=True,
+                               encoding=IO_ENCODING, timeout=120)
             if r.returncode == 0 and r.stdout.strip():
                 return r.stdout
         except Exception:
@@ -202,7 +212,9 @@ def build():
         print('不会写入未压缩产物 —— 体积与 SW 版本号都会失真。')
         return 1
     for name, content in files.items():
-        with open(name, 'w', encoding='utf-8') as f:
+        # newline='\n'：Windows 默认把 \n 翻成 \r\n，产物会白白多出几百字节，
+        # 且同一份源码在不同平台构建出的 index.html 字节不一致、git 里整文件抖一遍。
+        with open(name, 'w', encoding='utf-8', newline='\n') as f:
             f.write(content)
     print('built %s' % digest)
     for name in ('index.html', 'sw.js', 'manifest.webmanifest'):
@@ -244,7 +256,8 @@ def check():
             problems.append('缺少 ' + name)
             continue
         try:
-            r = subprocess.run(['node', '--check', name], capture_output=True, text=True, timeout=30)
+            r = subprocess.run(['node', '--check', name], capture_output=True, text=True,
+                               encoding=IO_ENCODING, errors='replace', timeout=30)
             if r.returncode != 0:
                 problems.append('%s 语法错误：%s' % (name, (r.stderr or '').strip().splitlines()[-1:]))
         except FileNotFoundError:

@@ -9,15 +9,92 @@
 import base64
 import html as htmlmod
 import os
+import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SRC = os.path.join(ROOT, 'index.html')
 OUT = os.path.join(HERE, 'regression.html')
-CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+
+
+def find_browser():
+    """找一个可用的 Chromium 内核浏览器。
+
+    以前这里写死 macOS 的 Chrome 路径，换个平台直接 FileNotFoundError。
+    现在顺序是：LB_BROWSER / CHROME_PATH 环境变量 → 平台常见安装路径 → PATH 里的命令。
+    Edge 与 Chrome 同为 Chromium，headless 行为一致，一并作为兜底。
+    """
+    env = os.environ.get('LB_BROWSER') or os.environ.get('CHROME_PATH')
+    if env:
+        if os.path.exists(env):
+            return env
+        raise SystemExit('LB_BROWSER 指向的浏览器不存在：' + env)
+
+    cands = []
+    if os.name == 'nt':
+        roots = [os.environ.get('PROGRAMFILES'), os.environ.get('PROGRAMFILES(X86)'),
+                 os.environ.get('LOCALAPPDATA')]
+        subs = [r'Google\Chrome\Application\chrome.exe',
+                r'Microsoft\Edge\Application\msedge.exe']
+        for r in roots:
+            if r:
+                cands.extend(os.path.join(r, s) for s in subs)
+    elif sys.platform == 'darwin':
+        cands = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                 '/Applications/Chromium.app/Contents/MacOS/Chromium',
+                 '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge']
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    for name in ('google-chrome', 'google-chrome-stable', 'chromium',
+                 'chromium-browser', 'microsoft-edge', 'chrome'):
+        p = shutil.which(name)
+        if p:
+            return p
+    raise SystemExit('没找到 Chrome / Chromium / Edge。请安装其中之一，'
+                     '或用 LB_BROWSER=/path/to/chrome 指定可执行文件。')
+
+
+def dump_dom(browser, url, profile, timeout):
+    """跑一次 headless Chrome，把序列化后的 DOM 读回来。
+
+    不用 subprocess.run 等进程退出：Chrome 在 --virtual-time-budget 下把 dump 写完
+    之后经常不结束（页面里有 setInterval 时尤其稳定复现），run 会一路等到超时，
+    而超时异常里拿不到已经写出的内容。这里把 stdout 落到临时文件，轮询到 </html>
+    出现就判定写完并结束进程，超时上限只作兜底。
+    """
+    cmd = [browser, '--headless=new', '--disable-gpu', '--no-sandbox',
+           '--disable-dev-shm-usage', '--virtual-time-budget=15000',
+           '--user-data-dir=' + profile, '--dump-dom', url]
+    done = False
+    with tempfile.TemporaryFile() as out:
+        p = subprocess.Popen(cmd, stdout=out, stderr=subprocess.PIPE)
+        deadline = time.time() + timeout
+        last = -1
+        while time.time() < deadline:
+            time.sleep(0.3)
+            size = os.fstat(out.fileno()).st_size
+            if size == last:
+                continue              # 没长出新内容，不必重复扫
+            last = size
+            out.seek(0)
+            if b'</html>' in out.read():
+                done = True
+                break
+        if p.poll() is None:
+            p.kill()                  # 写完了也常驻，主动结束
+        try:
+            p.communicate(timeout=15)
+        except Exception:
+            pass
+        out.seek(0)
+        return out.read().decode('utf-8', 'replace'), done
 
 MOCK = r'''
 (function () {
@@ -1225,8 +1302,13 @@ TEST = r'''
 
 
 def main():
+    # Windows 控制台默认按区域编码输出，断言里的中文会直接抛 UnicodeEncodeError
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
     if not os.path.exists(SRC):
-        print('缺少 index.html，请先运行 python3 build.py')
+        print('缺少 index.html，请先运行 python build.py（或 python3 build.py）')
         return 1
     with open(SRC, encoding='utf-8') as f:
         page = f.read()
@@ -1237,19 +1319,23 @@ def main():
         return 1
     page = page.replace(marker, '<script>\n' + MOCK + '\n</script>\n' + marker, 1)
     page = page.replace('</body>', '<script>\n' + TEST + '\n</script>\n</body>', 1)
-    with open(OUT, 'w', encoding='utf-8') as f:
+    with open(OUT, 'w', encoding='utf-8', newline='\n') as f:
         f.write(page)
 
-    cmd = [CHROME, '--headless=new', '--disable-gpu', '--no-sandbox',
-           '--disable-dev-shm-usage', '--virtual-time-budget=15000',
-           '--dump-dom', 'file://' + OUT]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    dom = p.stdout
+    browser = find_browser()
+    # 独立的临时 profile：本机已经开着 Chrome 时，不会因为 profile 被占用而启动失败。
+    # Chrome 退出时可能还持有目录句柄，清理失败直接忽略（由系统回收临时目录）。
+    with tempfile.TemporaryDirectory(prefix='lb-regression-', ignore_cleanup_errors=True) as profile:
+        # file:// 必须走 as_uri：手拼的 file://C:\... 在 Windows 上不是合法 URL
+        dom, complete = dump_dom(browser, pathlib.Path(OUT).as_uri(), profile, 180)
+    if not complete:
+        print('Chrome 在 180 秒内没有输出完整的 DOM（没等到 </html>）')
+        print(dom[-1200:])
+        return 1
     # 结果放在专门的 <pre> 里；不能用字符串标记搜索，因为 <script> 源码也会出现在 dump-dom 中
     m = re.search(r'<pre id="test-out"[^>]*>(.*?)</pre>', dom, re.S)
     if not m:
-        print('未能读回测试结果（Chrome 退出码 %s）' % p.returncode)
-        print((p.stderr or '')[-1200:])
+        print('未能读回测试结果：DOM 里没有 test-out 节点')
         print(dom[-800:])
         return 1
     result = htmlmod.unescape(m.group(1)).strip()
