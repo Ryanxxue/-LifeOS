@@ -945,9 +945,11 @@ TEST = r'''
     ok('P0-3：撤销后学习计划恢复', window.LifeApp.activePlans().length >= 1);
 
     /* --- P1-10 合并页分段 --- */
-    ok('P1-10：合并页有粘性分段导航与双列容器',
+    /* 最近记录那一栏已按需求删除，右列只留学习计划 */
+    ok('P1-10：合并页有粘性分段导航与双列容器（书架 + 计划，无最近记录栏）',
        !!q1('#view-library .lib-nav') && !!q1('#view-library .lib-cols') &&
-       !!q1('#lib-books') && !!q1('#lib-plans') && !!q1('#lib-logs'));
+       !!q1('#lib-books') && !!q1('#lib-plans') && !q1('#lib-logs') &&
+       !/最近记录/.test(q1('#view-library').textContent));
     ok('iOS 组件：分段控件初始就有选中滑块',
        q1('#view-library .lib-nav [data-id="lib-books"]').classList.contains('on'));
     q1('#view-library .lib-nav [data-id="lib-plans"]').click(); await tick();
@@ -1042,9 +1044,14 @@ TEST = r'''
     const contentEl = q1('#view-' + S.view + ' .card') || q1('.card');
     const navBf = navEl ? getComputedStyle(navEl).backdropFilter : '';
     const contentBf = contentEl ? getComputedStyle(contentEl).backdropFilter : '';
-    ok('iOS 26：玻璃只在导航层，内容卡片改用系统材料不模糊',
-       /blur/.test(navBf) && /^(none|)$/.test(contentBf),
-       'nav=' + navBf + ' card=' + contentBf);
+    /* 顶栏静止态刻意不挂材质：背景是 fixed 的，模糊不到东西，只会把顶栏染出色带；
+       滚动后（内容从下面经过）才上玻璃 */
+    if (navEl) navEl.classList.add('scrolled');
+    const navBfScrolled = navEl ? getComputedStyle(navEl).backdropFilter : '';
+    if (navEl) navEl.classList.remove('scrolled');
+    ok('iOS 26：顶栏静止态与页面连成一片，滚动后才上玻璃；内容卡片不模糊',
+       /^(none|)$/.test(navBf) && /blur/.test(navBfScrolled) && /^(none|)$/.test(contentBf),
+       'rest=' + navBf + ' scrolled=' + navBfScrolled + ' card=' + contentBf);
     const tabEl = q1('.tabbar');
     const tbRadius = tabEl ? parseFloat(getComputedStyle(tabEl).borderTopLeftRadius) : 0;
     const tbLeft = tabEl ? tabEl.getBoundingClientRect().left : 0;

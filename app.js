@@ -1149,11 +1149,11 @@ function initGlassLight() {
 const TABS = [
   { k: 'today', n: '今日', i: 'home' },
   { k: 'calendar', n: '日历', i: 'calendar' },
-  { k: 'library', n: '阅读·学习', i: 'book' },
+  { k: 'library', n: '学习', i: 'book' },
   { k: 'trend', n: '趋势', i: 'chart' }
 ];
 const VIEWS = ['today', 'calendar', 'library', 'trend', 'me'];
-const TITLES = { today: '今日', calendar: '日历', library: '阅读与学习', trend: '趋势', me: '我的' };
+const TITLES = { today: '今日', calendar: '日历', library: '学习', trend: '趋势', me: '我的' };
 /* 旧版把阅读、学习拆成两页：离线快照 / 旧链接里的 view 值统一落到合并页 */
 const VIEW_ALIAS = { reading: 'library', study: 'library' };
 
@@ -1993,7 +1993,7 @@ function renderLibrary() {
   /* 一行工具条：标签 + 同步按钮。原来「标签 / 统计 / 从微信读书同步 / 未配置 Key / 筛选」
      五行走完才看到书；现在统计进了页头、同步收成图标，筛选并进书架标题右边 */
   html += '<div class="lib-nav"><div class="seg">' +
-    [['lib-books', '书架'], ['lib-plans', '计划'], ['lib-logs', '记录']].map(x =>
+    [['lib-books', '书架'], ['lib-plans', '计划']].map(x =>
       '<button class="' + (S.libSec === x[0] ? 'on' : '') + '" data-act="libsec" data-id="' +
       x[0] + '">' + x[1] + '</button>').join('') + '</div>' +
     '<button class="iconbtn" data-act="wereadsync" aria-label="从微信读书同步" title="从微信读书同步">' +
@@ -2054,26 +2054,10 @@ function renderLibrary() {
       icon('plus', 17) + '新建计划</div></div>';
   }
 
-  /* ---- 右列：最近记录 ---- */
-  let logsHtml = '<div class="sec-head"><div class="sec-t">最近记录</div></div>';
-  const recent = S.logs.slice(0, 5);
-  if (recent.length) {
-    logsHtml += '<div class="card">' + recent.map(l => {
-      const p = S.plans.find(x => eqId(x.id, l.plan_id));
-      const d = String(l.day).slice(0, 10), dd = parseDay(d);
-      return '<div class="lrow" style="cursor:default">' +
-        '<div class="licon" style="background:var(--blue)">' + icon('pen', 16) + '</div>' +
-        '<div class="lbody"><div class="lrow-t">' + esc(p ? p.title : '已删除的计划') + '</div>' +
-        '<div class="lrow-sub">' + (dd.getMonth() + 1) + '月' + dd.getDate() + '日</div></div></div>';
-    }).join('') + '</div>';
-  } else {
-    logsHtml += '<div class="card"><div class="empty sm">还没有学习记录<br>' +
-      '<span class="eh">在上方计划点「记一次」，这里会按时间列出</span></div></div>';
-  }
-
+  /* 右列只留学习计划：最近记录那一栏已按需求去掉（记录仍入库、参与本周次数统计，
+     只是不再单独占一块版面） */
   html += '<div class="lib-cols"><div class="lib-left" id="lib-books">' + left + '</div>' +
-    '<div class="lib-right"><div id="lib-plans">' + planHtml + '</div>' +
-    '<div id="lib-logs">' + logsHtml + '</div></div></div>';
+    '<div class="lib-right"><div id="lib-plans">' + planHtml + '</div></div></div>';
 
   $('#view-library').innerHTML = html;
 }
