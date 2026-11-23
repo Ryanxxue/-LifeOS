@@ -1394,8 +1394,8 @@ function patchCheckinUI(habitId, day, actName) {
     if (hbox) {
       const hb = S.habits.find(x => String(x.id) === String(habitId));
       const col = (hb && hb.color) || '#0A84FF';
-      hbox.style.borderColor = on ? col : tint(col, 0.5);
-      hbox.style.background = on ? col : 'transparent';
+      hbox.style.borderColor = on ? col : tint(col, 0.45);
+      hbox.style.background = on ? col : tint(col, 0.12);
       hbox.style.color = on ? '#fff' : 'transparent';
     }
     if (row.hasAttribute('aria-checked')) {
@@ -1658,8 +1658,8 @@ function habitChip(h, day, actName) {
     '" aria-label="' + esc(h.name + '，' + (on ? '已完成' : '未完成')) + '"';
   return '<div class="hchip' + (on ? ' done' : '') + (pend ? ' pending' : '') +
     '" data-act="' + actName + '" data-id="' + h.id + '" data-day="' + day + '"' + a11y + '>' +
-    '<div class="hbox" style="border-color:' + esc(on ? col : tint(col, 0.5)) +
-    ';background:' + esc(on ? col : 'transparent') + ';color:' + esc(on ? '#fff' : 'transparent') + '">' +
+    '<div class="hbox" style="border-color:' + esc(on ? col : tint(col, 0.45)) +
+    ';background:' + esc(on ? col : tint(col, 0.12)) + ';color:' + esc(on ? '#fff' : 'transparent') + '">' +
     '<span class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 12) : '') + '</span></div>' +
     '<span class="hchip-t">' + esc(h.name) + '</span>' +
     (pend ? '<span class="hchip-pend">待同步</span>' : '') + '</div>';
@@ -1705,26 +1705,38 @@ function renderToday() {
   html += healthCells(day);
   html += healthHintHTML(day, h);
 
-  /* 打卡是核心动作，紧跟今日状态 */
-  html += '<div class="gtitle" style="display:flex;justify-content:space-between;align-items:center">' +
-    '<span>今日打卡' + (total ? '<span class="gnum" id="habit-prog">' + done + '/' + total + '</span>' : '') + '</span>' +
-    (total ? '<button style="color:var(--blue);font-size:14px" data-act="edittoggle">' + (S.editing ? '完成' : '编辑') + '</button>' : '') +
-    '</div>';
+  /* 打卡是核心动作，紧跟今日状态。
+     分组名做成行首小标签，与勾选项、编辑、新建共用一行——整块只有 30px，
+     不再为「今日打卡 2/3 / 编辑」单独占一行。 */
+  html += '<div class="habit-row">' +
+    '<div class="habit-lead"><span class="hl-t">今日打卡</span><span class="hl-s">打卡</span>' +
+    (total ? '<span class="gnum" id="habit-prog">' + done + '/' + total + '</span>' : '') + '</div>';
+  if (total && !S.editing) {
+    html += '<div class="habit-strip" id="habit-strip">' +
+      habitsForDay(day).map(x => habitChip(x, day, 'toggle')).join('') + '</div>';
+  } else {
+    html += '<div style="flex:1"></div>';
+  }
+  if (total) {
+    /* 编辑态必须一眼能退出，所以给文字「完成」；正常态只是次要入口，用铅笔图标 */
+    html += S.editing
+      ? '<button class="habit-done" data-act="edittoggle">完成</button>'
+      : '<button class="habit-btn" data-act="edittoggle" title="编辑打卡项" aria-label="编辑打卡项">' +
+        icon('pen', 15) + '</button>';
+  }
+  if (!S.editing) {
+    html += '<button class="habit-btn" data-act="newhabit" title="新建打卡项" aria-label="新建打卡项">' +
+      icon('plus', 15) + '</button>';
+  }
+  html += '</div>';
 
   if (!total) {
-    html += '<div class="card"><div class="empty">还没有打卡项。<br>点下方新建一个，或到「我的 → 打卡项管理」添加。</div>' +
-      '<div class="addrow" data-act="newhabit">' + icon('plus', 17) + '新建打卡项</div></div>';
+    html += '<div class="card" style="margin-top:10px"><div class="empty">还没有打卡项。<br>' +
+      '点上方 + 新建一个，或到「我的 → 打卡项管理」添加。</div></div>';
   } else if (S.editing) {
-    /* 编辑态保留纵向列表：删除按钮需要整行宽度，横向圆点放不下 */
-    html += '<div class="card">' + habitsForDay(day).map(x => habitRow(x, day, true, 'toggle')).join('') + '</div>';
-  } else {
-    /* 正常态：一行胶囊，高度固定 34px，习惯多了横向滑动。
-       不再套一层卡片——胶囊自己就是容器，少一层嵌套少一层边界。 */
-    html += '<div class="habit-strip" id="habit-strip">' +
-      habitsForDay(day).map(x => habitChip(x, day, 'toggle')).join('') +
-      '<button class="hchip add" data-act="newhabit" aria-label="新建打卡项">' +
-        icon('plus', 13) + '<span class="hchip-t">新建</span></button>' +
-      '</div>';
+    /* 编辑态保留纵向列表：删除按钮需要整行宽度，行内勾选项放不下 */
+    html += '<div class="card" style="margin-top:10px">' +
+      habitsForDay(day).map(x => habitRow(x, day, true, 'toggle')).join('') + '</div>';
   }
 
   html += reviewHTML();

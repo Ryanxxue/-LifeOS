@@ -235,6 +235,13 @@ TEST = r'''
     ok('日历：选中日展示 2 条运动明细',
        q1('#view-calendar') && document.querySelectorAll('#view-calendar .actrow').length === 2,
        'rows=' + document.querySelectorAll('#view-calendar .actrow').length);
+    /* 日历日详情与首页共用同一套勾选项：30px 高、无胶囊底 */
+    const calChips = document.querySelectorAll('#view-calendar .hchip-list .hchip');
+    ok('日历：日详情沿用同一套勾选项（同高、无底色）',
+       calChips.length >= 1 &&
+       Math.round(calChips[0].getBoundingClientRect().height) <= 32 &&
+       getComputedStyle(calChips[0]).backgroundColor === 'rgba(0, 0, 0, 0)',
+       'n=' + calChips.length + ' h=' + (calChips[0] ? Math.round(calChips[0].getBoundingClientRect().height) : 0));
     ok('日历：运动字段换算与中文名正确',
        /室内跑步/.test(q1('#view-calendar').textContent) &&
        /45 分钟/.test(q1('#view-calendar').textContent) &&
@@ -889,11 +896,16 @@ TEST = r'''
        !q1('#view-today .hero') && !q1('#today-hero') &&
        q1('#view-today .health').getBoundingClientRect().top <
        q1('#view-today .habit-strip').getBoundingClientRect().top);
-    ok('今日页：完成度收进打卡标题右侧的小字',
-       !!q1('#habit-prog') && /^\d+\/\d+$/.test(q1('#habit-prog').textContent.trim()));
-    ok('今日打卡：正常态是一行胶囊（含新建入口），不再是纵向列表',
-       chips.length >= 1 && !!q1('#view-today .hchip.add') && !q1('#view-today .stripcard') &&
-       strip.getBoundingClientRect().height < 44);
+    ok('今日页：完成度收进分组名后面（不单独占一行）',
+       !!q1('#habit-prog') && /^\d+\/\d+$/.test(q1('#habit-prog').textContent.trim()) &&
+       !!q1('#view-today .habit-lead #habit-prog'));
+    /* 打卡整块只有一行：分组名、勾选项、编辑、新建都在 .habit-row 里，高 ≤ 34px */
+    const hrowH = Math.round(q1('#view-today .habit-row').getBoundingClientRect().height);
+    ok('今日打卡：分组名与勾选项同一行、整行 ≤ 34px，新建/编辑是行尾图标',
+       chips.length >= 1 && !!q1('#view-today .habit-btn[data-act="newhabit"]') &&
+       !!q1('#view-today .habit-btn[data-act="edittoggle"]') &&
+       !!q1('#view-today .habit-lead') && !q1('#view-today .stripcard') && hrowH <= 34,
+       'rowH=' + hrowH);
     /* 胶囊宽度跟着名字走（这正是它比四等分格子好看的原因），要求的是「同高、不换行」 */
     const ch = Array.prototype.map.call(chips, c => Math.round(c.getBoundingClientRect().height));
     const tops = Array.prototype.map.call(chips, c => Math.round(c.getBoundingClientRect().top));
