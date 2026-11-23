@@ -1433,8 +1433,8 @@ function patchCheckinUI(habitId, day, actName) {
     if (hbox) {
       const hb = S.habits.find(x => String(x.id) === String(habitId));
       const col = (hb && hb.color) || '#0A84FF';
-      hbox.style.borderColor = on ? col : tint(col, 0.45);
-      hbox.style.background = on ? col : tint(col, 0.12);
+      hbox.style.borderColor = on ? col : hbTint(on, col).border;
+      hbox.style.background = on ? col : hbTint(on, col).bg;
       hbox.style.color = on ? '#fff' : 'transparent';
     }
     if (row.hasAttribute('aria-checked')) {
@@ -1689,6 +1689,15 @@ function tint(hex, alpha) {
    剩下的都是空气，一排看过去像四个未填的表格；胶囊把勾和名字绑在一起，
    宽度跟着名字走，视觉重量与"一条可点的动作"相符。
    勾选框（.hbox）与纵向行、日历日详情共用同一套。 */
+/* 勾选框的描边与淡底强度看主题：浅色背景上 45%/12% 太淡，整排框会「消失」；
+   深色背景上相反，淡到刚好能看见轮廓才不抢眼。 */
+function hbTint(on, col) {
+  const light = document.documentElement.getAttribute('data-theme') === 'light';
+  return {
+    border: on ? col : tint(col, light ? 0.62 : 0.45),
+    bg: on ? col : tint(col, light ? 0.15 : 0.12)
+  };
+}
 function habitChip(h, day, actName) {
   const on = isDone(h.id, day);
   const pend = pendingOf(h.id, day) !== undefined;
@@ -1697,8 +1706,8 @@ function habitChip(h, day, actName) {
     '" aria-label="' + esc(h.name + '，' + (on ? '已完成' : '未完成')) + '"';
   return '<div class="hchip' + (on ? ' done' : '') + (pend ? ' pending' : '') +
     '" data-act="' + actName + '" data-id="' + h.id + '" data-day="' + day + '"' + a11y + '>' +
-    '<div class="hbox" style="border-color:' + esc(on ? col : tint(col, 0.45)) +
-    ';background:' + esc(on ? col : tint(col, 0.12)) + ';color:' + esc(on ? '#fff' : 'transparent') + '">' +
+    '<div class="hbox" style="border-color:' + esc(hbTint(on, col).border) +
+    ';background:' + esc(hbTint(on, col).bg) + ';color:' + esc(on ? '#fff' : 'transparent') + '">' +
     '<span class="chk' + (on ? ' on' : '') + '">' + (on ? icon('check', 12) : '') + '</span></div>' +
     '<span class="hchip-t">' + esc(h.name) + '</span>' +
     (pend ? '<span class="hchip-pend">待同步</span>' : '') + '</div>';
