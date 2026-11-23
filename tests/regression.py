@@ -9,15 +9,92 @@
 import base64
 import html as htmlmod
 import os
+import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SRC = os.path.join(ROOT, 'index.html')
 OUT = os.path.join(HERE, 'regression.html')
-CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+
+
+def find_browser():
+    """找一个可用的 Chromium 内核浏览器。
+
+    以前这里写死 macOS 的 Chrome 路径，换个平台直接 FileNotFoundError。
+    现在顺序是：LB_BROWSER / CHROME_PATH 环境变量 → 平台常见安装路径 → PATH 里的命令。
+    Edge 与 Chrome 同为 Chromium，headless 行为一致，一并作为兜底。
+    """
+    env = os.environ.get('LB_BROWSER') or os.environ.get('CHROME_PATH')
+    if env:
+        if os.path.exists(env):
+            return env
+        raise SystemExit('LB_BROWSER 指向的浏览器不存在：' + env)
+
+    cands = []
+    if os.name == 'nt':
+        roots = [os.environ.get('PROGRAMFILES'), os.environ.get('PROGRAMFILES(X86)'),
+                 os.environ.get('LOCALAPPDATA')]
+        subs = [r'Google\Chrome\Application\chrome.exe',
+                r'Microsoft\Edge\Application\msedge.exe']
+        for r in roots:
+            if r:
+                cands.extend(os.path.join(r, s) for s in subs)
+    elif sys.platform == 'darwin':
+        cands = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                 '/Applications/Chromium.app/Contents/MacOS/Chromium',
+                 '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge']
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    for name in ('google-chrome', 'google-chrome-stable', 'chromium',
+                 'chromium-browser', 'microsoft-edge', 'chrome'):
+        p = shutil.which(name)
+        if p:
+            return p
+    raise SystemExit('没找到 Chrome / Chromium / Edge。请安装其中之一，'
+                     '或用 LB_BROWSER=/path/to/chrome 指定可执行文件。')
+
+
+def dump_dom(browser, url, profile, timeout):
+    """跑一次 headless Chrome，把序列化后的 DOM 读回来。
+
+    不用 subprocess.run 等进程退出：Chrome 在 --virtual-time-budget 下把 dump 写完
+    之后经常不结束（页面里有 setInterval 时尤其稳定复现），run 会一路等到超时，
+    而超时异常里拿不到已经写出的内容。这里把 stdout 落到临时文件，轮询到 </html>
+    出现就判定写完并结束进程，超时上限只作兜底。
+    """
+    cmd = [browser, '--headless=new', '--disable-gpu', '--no-sandbox',
+           '--disable-dev-shm-usage', '--virtual-time-budget=15000',
+           '--user-data-dir=' + profile, '--dump-dom', url]
+    done = False
+    with tempfile.TemporaryFile() as out:
+        p = subprocess.Popen(cmd, stdout=out, stderr=subprocess.PIPE)
+        deadline = time.time() + timeout
+        last = -1
+        while time.time() < deadline:
+            time.sleep(0.3)
+            size = os.fstat(out.fileno()).st_size
+            if size == last:
+                continue              # 没长出新内容，不必重复扫
+            last = size
+            out.seek(0)
+            if b'</html>' in out.read():
+                done = True
+                break
+        if p.poll() is None:
+            p.kill()                  # 写完了也常驻，主动结束
+        try:
+            p.communicate(timeout=15)
+        except Exception:
+            pass
+        out.seek(0)
+        return out.read().decode('utf-8', 'replace'), done
 
 MOCK = r'''
 (function () {
@@ -127,9 +204,8 @@ MOCK = r'''
       return out;
     }
     if (query.op === 'update') {
-      /* 模拟 RLS 把目标行过滤掉：PostgREST 会返回 200 + 空数组，且数据不变。
-         前端必须把这当成失败，不能拿「没返回行」当成功继续改内存。 */
-      if (window.__MOCK__ && window.__MOCK__.dropUpdates === t) return [];
+      // 故障注入：模拟这一行在云端已经不存在（别的设备删了 / 被 RLS 过滤）
+      if (window.__MOCK__ && window.__MOCK__.updateNoMatch === t) return [];
       const out = [];
       list.forEach(row => { if (match(row)) { Object.assign(row, query.payload); out.push(clone(row)); } });
       return out;
@@ -174,8 +250,8 @@ MOCK = r'''
   window.__STORE__ = store;
   window.__dayAt__ = dayAt;
   /* 故障注入：模拟「云端把写入落到匿名身份」与「单张表查询失败」 */
-  window.__MOCK__ = { forceOwner: null, failTable: null, dropUpdates: null, hideLastInserted: false, lastInsertId: null,
-    queries: [] };
+  window.__MOCK__ = { forceOwner: null, failTable: null, hideLastInserted: false, lastInsertId: null,
+    updateNoMatch: null, queries: [] };
 })();
 '''
 
@@ -484,6 +560,16 @@ TEST = r'''
     ok('写入：重新拉取云端数据后新项仍然存在',
        S.habits.some(h => h.name === '回归测试待办') && !S.offline);
 
+    /* 写成功后本机快照必须跟着更新：否则下一次加载失败回退到快照时，
+       刚新增的打卡项会“消失”、刚删除的会“回来”，表现为「刷新就变回原样」。 */
+    await new Promise(r => setTimeout(r, 700));
+    const snapAfterWrite = window.LifeApp.readSnapshot();
+    ok('写入：写成功后本机快照同步更新',
+       !!snapAfterWrite && Array.isArray(snapAfterWrite.data.habits) &&
+       snapAfterWrite.data.habits.some(h => h.name === '回归测试待办'),
+       'snapHabits=' + (snapAfterWrite && snapAfterWrite.data.habits
+         ? snapAfterWrite.data.habits.map(h => h.name).join(',') : 'null'));
+
     /* 云端把 INSERT 落到 owner_id='anon' 时必须报错，不能显示「已添加」 */
     window.__MOCK__.forceOwner = 'anon';
     const hCount1 = S.habits.length;
@@ -537,32 +623,32 @@ TEST = r'''
        用户会以为「刚删的又回来了」「刚加的丢了」 */
     window.LifeApp.render();
     const fbar = q1('#fresh-bar');
-    ok('加载：部分表失败时顶部直接告警并可一键重新加载',
-       !!fbar && !fbar.hidden && fbar.classList.contains('warn') &&
-       /没读到/.test(fbar.textContent) && /上次缓存/.test(fbar.textContent) &&
-       /书架/.test(fbar.textContent) && !!q1('#fresh-bar [data-act="reloadall"]'),
+    ok('加载：部分表失败时顶部指名哪块没更新，并可直接点它重试',
+       !!fbar && !fbar.hidden &&
+       /未更新/.test(fbar.textContent) && /本机缓存/.test(fbar.textContent) &&
+       /书架/.test(fbar.textContent) && fbar.getAttribute('data-act') === 'reloadall',
        'bar=' + (fbar ? fbar.textContent.trim() : 'null'));
     window.__MOCK__.failTable = null;
 
     /* --- 写入确认：云端返回 0 行（被 RLS 过滤）时绝不允许静默成功 --- */
     window.LifeApp.loadAll(); await tick();
     const hSnap = JSON.stringify(S.habits.find(h => String(h.id) === '1'));
-    window.__MOCK__.dropUpdates = 'habits';
+    window.__MOCK__.updateNoMatch = 'habits';
     let rmErr = null;
     try { await window.LifeApp.removeHabit(1); } catch (e) { rmErr = e; }
     const hSnap2 = JSON.stringify(S.habits.find(h => String(h.id) === '1'));
     ok('写入：云端 0 行确认时删除明确失败、且不改内存（不再「删了刷新又回来」）',
-       !!rmErr && /0 行受影响/.test(rmErr.message) && hSnap === hSnap2,
+       !!rmErr && /没有确认这次修改/.test(rmErr.message) && hSnap === hSnap2,
        'err=' + (rmErr && rmErr.message) + ' changed=' + (hSnap !== hSnap2));
     /* 恢复云端确认后，同一个操作应当真正生效 */
-    window.__MOCK__.dropUpdates = null;
+    window.__MOCK__.updateNoMatch = null;
     let rmOk = false;
     try { await window.LifeApp.removeHabit(1); rmOk = true; } catch (e) {}
     const hAfterRm = S.habits.find(h => String(h.id) === '1');
     ok('写入：恢复确认后删除真正落库并更新内存',
        rmOk && !!hAfterRm && hAfterRm.archived === true,
        'archived=' + (hAfterRm && hAfterRm.archived));
-    delete window.__MOCK__.dropUpdates;
+    delete window.__MOCK__.updateNoMatch;
 
     /* 写操作后必须把本地快照一起更新：否则下次打开会先渲染旧快照，
        看起来就是「删了又回来 / 加了又没了」 */
@@ -573,6 +659,117 @@ TEST = r'''
     ok('写入：操作后本地快照同步更新（重新打开不会先显示旧数据）',
        !!snapHabit && snapHabit.archived === true,
        'snap=' + (snapHabit ? snapHabit.archived : 'null'));
+    /* 打卡项这一张表读不到时，首页必须指名说清「哪块没更新」，
+       不能让用户面对一份看起来正常、其实是本机缓存的数据。 */
+    window.__MOCK__.failTable = 'habits';
+    await window.LifeApp.loadAll();
+    window.LifeApp.render(); await tick();
+    ok('加载：打卡项读取失败时首页常驻提示并指名',
+       !q1('#fresh-bar').hidden && /打卡项/.test(q1('#fresh-bar').textContent) &&
+       (S.loadFailed || []).indexOf('habits') >= 0 && S.habits.length > 0,
+       'bar=' + q1('#fresh-bar').textContent);
+    window.__MOCK__.failTable = null;
+    await window.LifeApp.loadAll();
+    window.LifeApp.render(); await tick();
+    ok('加载：恢复后不再显示未更新提示',
+       q1('#fresh-bar').hidden || !/未更新/.test(q1('#fresh-bar').textContent),
+       'bar=' + q1('#fresh-bar').textContent);
+
+    /* --- 同样的「写后必须能从前端复原」检查，逐类数据各验一遍 --- */
+    /* 书架：新增一本，写成功后 books 读取失败，界面不能退回旧书架 */
+    goTab('library'); await tick();
+    const addBookBtn = q1('[data-act="addbook"]');
+    if (addBookBtn) addBookBtn.click();
+    await tick();
+    const manualBtn = q1('#sheet [data-act="manualbook"]');
+    if (manualBtn) manualBtn.click();
+    await tick();
+    const tInput = q1('#mb-title');
+    if (tInput) { tInput.value = '回归书架新书'; tInput.dispatchEvent(new Event('input', { bubbles: true })); }
+    const sBookBtn = q1('[data-act="savemanualbook"]');
+    if (sBookBtn) sBookBtn.click();
+    await tick(); await tick();
+    ok('写入：新增书籍写入云端并留在内存',
+       store.books.some(b => b.title === '回归书架新书') && S.books.some(b => b.title === '回归书架新书'),
+       'store=' + store.books.length + ' S=' + S.books.length);
+
+    await new Promise(r => setTimeout(r, 700));
+    const snapBook = window.LifeApp.readSnapshot();
+    ok('写入：新增书籍写成功后本机快照同步更新',
+       !!snapBook && (snapBook.data.books || []).some(b => b.title === '回归书架新书'),
+       'snapBooks=' + (snapBook ? (snapBook.data.books || []).length : 'null'));
+
+    window.__MOCK__.failTable = 'books';
+    await window.LifeApp.loadAll();
+    window.LifeApp.render(); await tick();
+    ok('加载：书架读取失败时提示指名「书架」且仍显示本机缓存',
+       !q1('#fresh-bar').hidden && /书架/.test(q1('#fresh-bar').textContent) &&
+       S.books.some(b => b.title === '回归书架新书'),
+       'bar=' + q1('#fresh-bar').textContent);
+    window.__MOCK__.failTable = null;
+
+    /* 身体数据：由 COROS 同步写入，同样必须落到本机快照 */
+    const healthDay = dayAt(0);
+    await window.LifeApp.upsertHealth(healthDay, { sleep_total: 7.25 });
+    window.LifeApp.render();
+    await new Promise(r => setTimeout(r, 700));
+    const snapHealth = window.LifeApp.readSnapshot();
+    ok('写入：身体数据写成功后本机快照同步更新',
+       !!snapHealth && !!snapHealth.data.health[healthDay] &&
+       Number(snapHealth.data.health[healthDay].sleep_total) === 7.25,
+       'health=' + JSON.stringify(snapHealth && snapHealth.data.health[healthDay]));
+
+    window.__MOCK__.failTable = 'health_daily';
+    await window.LifeApp.loadAll();
+    window.LifeApp.render(); await tick();
+    ok('加载：身体数据读取失败时提示指名「身体数据」',
+       /身体数据/.test(q1('#fresh-bar').textContent) && S.health[healthDay] &&
+       Number(S.health[healthDay].sleep_total) === 7.25,
+       'bar=' + q1('#fresh-bar').textContent);
+    window.__MOCK__.failTable = null;
+
+    /* 快照时间戳是「数据取自云端的时刻」，不能被一次写入刷新成现在，
+       否则「数据更新于 X 小时前」永远显示不出来 */
+    S.loadAt = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    window.LifeApp.saveSnapshot();
+    S.loadAt = null;      // 写入触发的保存不应改动它
+    const snapAge = window.LifeApp.readSnapshot();
+    const ageHours = Math.round((Date.now() - new Date(snapAge.at).getTime()) / 3600000);
+    ok('快照：时间戳记的是取数时刻，写入不会把它刷成现在', ageHours === 3, 'age=' + ageHours + 'h');
+    await window.LifeApp.loadAll();      // 恢复真实取数时间
+    S.loadAt = new Date().toISOString();
+
+    /* 删除必须有云端确认：UPDATE 一行都没改到（已被别的设备删掉 / 被 RLS 过滤）时，
+       不能把内存标成已删除，否则界面显示“删了”、下次加载又拉回来 */
+    window.LifeApp.go('today'); await tick();
+    const etBtn = q1('[data-act="edittoggle"]');
+    if (etBtn) etBtn.click();
+    await tick();
+    const victim = S.habits.find(h => !h.archived);
+    window.__MOCK__.updateNoMatch = 'habits';
+    const minusBtn = victim ? q1('[data-act="delhabit"][data-id="' + victim.id + '"]') : null;
+    if (minusBtn) minusBtn.click();
+    await tick();
+    const aok = q1('#a-ok');
+    if (aok) aok.click();
+    await tick(); await tick();
+    ok('删除：云端没确认时拒绝把内存标成已删除',
+       /删除失败/.test(q1('#toast').textContent) &&
+       !!S.habits.find(h => h.id === victim.id && !h.archived) &&
+       !!store.habits.find(h => String(h.id) === String(victim.id) && !h.archived),
+       'toast=' + q1('#toast').textContent);
+    window.__MOCK__.updateNoMatch = null;
+    S.editing = false; window.LifeApp.render();
+
+    /* 清掉本节造的数据，后面的「最近删除 / 导入 / 今日身体数据」用例依赖原始条数 */
+    const bi = store.books.findIndex(b => b.title === '回归书架新书');
+    if (bi >= 0) store.books.splice(bi, 1);
+    S.books = S.books.filter(b => b.title !== '回归书架新书');
+    const hi = store.health_daily.findIndex(r => String(r.day).slice(0, 10) === healthDay);
+    if (hi >= 0) store.health_daily.splice(hi, 1);
+    delete S.health[healthDay];
+    window.LifeApp.saveSnapshot();
+    window.LifeApp.render();
 
     goMe(); await tick();
     ok('诊断：我的页显示云端写入状态与数据账号',
@@ -1311,8 +1508,13 @@ TEST = r'''
 
 
 def main():
+    # Windows 控制台默认按区域编码输出，断言里的中文会直接抛 UnicodeEncodeError
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
     if not os.path.exists(SRC):
-        print('缺少 index.html，请先运行 python3 build.py')
+        print('缺少 index.html，请先运行 python build.py（或 python3 build.py）')
         return 1
     with open(SRC, encoding='utf-8') as f:
         page = f.read()
@@ -1323,19 +1525,23 @@ def main():
         return 1
     page = page.replace(marker, '<script>\n' + MOCK + '\n</script>\n' + marker, 1)
     page = page.replace('</body>', '<script>\n' + TEST + '\n</script>\n</body>', 1)
-    with open(OUT, 'w', encoding='utf-8') as f:
+    with open(OUT, 'w', encoding='utf-8', newline='\n') as f:
         f.write(page)
 
-    cmd = [CHROME, '--headless=new', '--disable-gpu', '--no-sandbox',
-           '--disable-dev-shm-usage', '--virtual-time-budget=15000',
-           '--dump-dom', 'file://' + OUT]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    dom = p.stdout
+    browser = find_browser()
+    # 独立的临时 profile：本机已经开着 Chrome 时，不会因为 profile 被占用而启动失败。
+    # Chrome 退出时可能还持有目录句柄，清理失败直接忽略（由系统回收临时目录）。
+    with tempfile.TemporaryDirectory(prefix='lb-regression-', ignore_cleanup_errors=True) as profile:
+        # file:// 必须走 as_uri：手拼的 file://C:\... 在 Windows 上不是合法 URL
+        dom, complete = dump_dom(browser, pathlib.Path(OUT).as_uri(), profile, 180)
+    if not complete:
+        print('Chrome 在 180 秒内没有输出完整的 DOM（没等到 </html>）')
+        print(dom[-1200:])
+        return 1
     # 结果放在专门的 <pre> 里；不能用字符串标记搜索，因为 <script> 源码也会出现在 dump-dom 中
     m = re.search(r'<pre id="test-out"[^>]*>(.*?)</pre>', dom, re.S)
     if not m:
-        print('未能读回测试结果（Chrome 退出码 %s）' % p.returncode)
-        print((p.stderr or '')[-1200:])
+        print('未能读回测试结果：DOM 里没有 test-out 节点')
         print(dom[-800:])
         return 1
     result = htmlmod.unescape(m.group(1)).strip()

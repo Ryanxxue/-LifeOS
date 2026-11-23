@@ -237,26 +237,6 @@ async function insertRows(table, payload) {
   }
   return rows;
 }
-/* 更新一行并确认云端真的改了。
-   PostgREST 在 RLS 过滤掉目标行（会话失效、行已不存在、owner 不匹配）时会返回
-   200 + 空数组，而不是报错。以前前端拿不到行也照样改内存，于是出现「删了/改了，
-   界面变了，刷新又回到原样」——看起来像只改了本地快照。
-   所以所有业务更新统一走这里：0 行 = 明确失败，绝不静默。 */
-async function updateRows(table, id, payload) {
-  const rows = normRows(await q(DB.from(table).update(payload).eq('id', dbId(id)).select()));
-  if (!rows.length) {
-    const e = new Error('云端没有确认这次修改（0 行受影响）：登录可能已过期，或这条记录已被删除');
-    e.writeZero = true;
-    noteWriteError('update ' + table, e);
-    throw e;
-  }
-  assertOwner(rows[0]);
-  if (S.lastWriteError) {
-    S.lastWriteError = null;
-    try { localStorage.removeItem('lb.lastWriteError'); } catch (x) {}
-  }
-  return rows[0];
-}
 /* 写操作前的守卫：离线只读、会话失效都必须在写入之前明确告知，而不是静默拦掉 */
 let sessionCheckedAt = 0;
 async function writeGuard(act) {
@@ -304,9 +284,10 @@ const S = {
   loading: false,
   offline: false,
   snapshotAt: null,
+  loadAt: null,           // 上次「完整」从云端取数成功的时刻（快照时间戳取它，不取写入时刻）
   ownerId: null,          // 从云端读回的真实 owner，用于校验写入身份
   loadWarnings: 0,        // 本次加载失败的表数量
-  loadFailTables: [],     // 本次加载失败的表名（用于明确告知是哪部分在显示缓存）
+  loadFailed: [],         // 本次读取失败的表名（界面上要说清是哪块没更新）
   lastWriteError: null,   // 最近一次写入失败，「我的 → 数据健康」可见
   pending: {},            // 离线打卡队列：'day|habitId' -> 目标状态 true/false
   limitHit: false,        // 是否有表触达加载上限
@@ -381,7 +362,7 @@ function clearLocalData() {
       if (k.indexOf('lb.draft.') === 0) localStorage.removeItem(k);
     });
   } catch (e) {}
-  S.pending = {}; S.snapshotAt = null; S.lastWriteError = null; S.ownerId = null;
+  S.pending = {}; S.snapshotAt = null; S.loadAt = null; S.lastWriteError = null; S.ownerId = null;
   S.habits = []; S.checkins = {}; S.health = {}; S.activities = [];
   S.books = []; S.notes = []; S.plans = []; S.logs = [];
 }
@@ -389,10 +370,33 @@ function saveSnapshot() {
   try {
     const data = {};
     SNAP_FIELDS.forEach(function (k) { data[k] = S[k]; });
-    const at = new Date().toISOString();
+    /* at 记的是「数据从云端取回的时刻」，不是「这次写盘的时刻」。
+       否则写一次内容就把时间戳刷成现在，界面上的「数据更新于 X 小时前」
+       会永远显示不出来，用户就失去判断「看到的是不是旧数据」的唯一线索。 */
+    const at = S.loadAt || S.snapshotAt || new Date().toISOString();
     localStorage.setItem(SNAP_KEY, JSON.stringify({ at: at, data: data, owner: userId() }));
     S.snapshotAt = at;
   } catch (e) {}
+}
+/* 写入成功后也要刷新快照。
+   只靠「加载成功时保存一次」是不够的：只要某次加载失败，界面就会回退到快照，
+   刚写进去的内容看起来就像没保存（新增的打卡项消失、删掉的又回来）。
+   这里让快照尽量等于「界面此刻显示的内容」，代价是一次防抖后的 localStorage 写入。
+   没有成功加载做基底时（S.snapshotAt 为空）不写，避免用半成品覆盖掉可用的快照。 */
+let snapSoonTimer = null;
+function saveSnapshotSoon() {
+  if (!S.snapshotAt || snapSoonTimer) return;
+  snapSoonTimer = setTimeout(function () {
+    snapSoonTimer = null;
+    saveSnapshot();
+  }, 400);
+}
+/* 页面被系统回收（iOS 切走即冻结、再回来可能是重开）时，上面 400ms 的防抖
+   没落盘就等于没保存。隐藏/卸载前必须立刻写一次，否则「刚删的又回来」。 */
+function flushSnapshotNow() {
+  if (snapSoonTimer) { clearTimeout(snapSoonTimer); snapSoonTimer = null; }
+  if (!S.user || !S.snapshotAt) return;
+  saveSnapshot();
 }
 function readSnapshot() {
   try {
@@ -404,24 +408,14 @@ function readSnapshot() {
     return o;
   } catch (e) { return null; }
 }
-/* 写完就更新本地快照（防抖）。
-   以前只有 loadAll 之后才存快照：删了/加了东西，界面是对的、云端也对，
-   但 localStorage 里仍是旧的一份；下次打开会先拿旧快照渲染一遍，
-   如果那次加载慢或部分失败，用户看到的就是「删了又回来 / 加了又没了」。
-   离线或本次加载有表没读到时故意不存：那会把旧数据盖上新的时间戳，
-   反而让问题更隐蔽。 */
-let snapTimer = null;
-function scheduleSnapshot() {
-  if (snapTimer) return;
-  snapTimer = setTimeout(function () {
-    snapTimer = null;
-    if (S.user && !S.offline && !S.loadWarnings) saveSnapshot();
-  }, 900);
-}
 function applySnapshot(snap, markOffline) {
   if (!snap || !snap.data) return false;
   SNAP_FIELDS.forEach(function (k) { if (snap.data[k] !== undefined) S[k] = snap.data[k]; });
   S.snapshotAt = snap.at;
+  S.loadAt = snap.at;
+  /* 快照是按账号隔离存的，可以直接把它当作「当前账号应为谁」：
+     加载失败时也能继续用 owner 校验拦截写到别人的行（否则只能等下次加载才知道）。 */
+  if (snap.owner && !S.ownerId) S.ownerId = String(snap.owner);
   if (markOffline !== false) S.offline = true;
   applyPending();
   bump();
@@ -482,6 +476,13 @@ const normRows = rows => (rows || []).map(normRow);
 /* 书架/划线/运动设上限：个人库足够用，避免无界增长把首屏拖慢；完整数据仍可全量导出。
    checkins 不设上限而是分页取全 —— 它决定历史完成率与热力图，缺行会直接算错。 */
 const LOAD_LIMITS = { books: 1000, notes: 3000, activities: 200, checkins: 6000 };
+/* loadAll 里 Promise.allSettled 的顺序，用来把失败项翻译成表名 */
+const LOAD_TABLES = ['habits', 'checkins', 'health_daily', 'activities',
+                     'books', 'notes', 'study_plans', 'study_logs'];
+/* 表名 → 界面上对用户有意义的叫法，用于「哪块数据没更新」的提示 */
+const LOAD_LABELS = { habits: '打卡项', checkins: '打卡记录', health_daily: '身体数据',
+                      activities: '运动记录', books: '书架', notes: '划线',
+                      study_plans: '学习计划', study_logs: '学习记录' };
 const PAGE_SIZE = 500;
 /* 分页取全：服务端可能对单次响应设了行数上限，一次 select 拿不全就会被静默截断。
    每页用 range 取，取到不足一页即认为到底；累计到 cap 仍未到底则标记 truncated。 */
@@ -516,19 +517,21 @@ async function loadAll() {
   ]);
   const at = i => rs[i].status === 'fulfilled' ? (rs[i].value || null) : null;
   const ckResEarly = at(1);
-  /* 记下具体哪几张表没读到。只报一个数字，用户没法判断「我的打卡没了」到底是
-     加载失败还是真被删了——这两件事的处置完全不同。 */
-  const LOAD_TABLES = ['habits', 'checkins', 'health_daily', 'activities',
-                       'books', 'notes', 'study_plans', 'study_logs'];
-  S.loadFailTables = rs.map((r, i) =>
-    (r.status === 'rejected' || (i === 1 && ckResEarly && ckResEarly.error)) ? LOAD_TABLES[i] : null
-  ).filter(Boolean);
-  const failed = S.loadFailTables.length;
+  const failed = rs.filter(r => r.status === 'rejected').length + (ckResEarly && ckResEarly.error ? 1 : 0);
+  /* 记下具体是哪几张表没读到：界面要明确告诉用户「打卡项没更新」，
+     而不是让他面对一份看起来正常、其实是旧缓存的数据。 */
+  S.loadFailed = rs.map((r, i) => {
+    const bad = r.status === 'rejected' || (i === 1 && ckResEarly && ckResEarly.error);
+    return bad ? LOAD_TABLES[i] : null;
+  }).filter(Boolean);
   if (failed >= rs.length) {
     const firstRej = rs.find(r => r.status === 'rejected');
     throw ((ckResEarly && ckResEarly.error) || (firstRej && firstRej.reason) || new Error('数据加载失败'));
   }
   S.loadWarnings = failed;
+  /* 只有「八张表全部读到了」才算一次可信的取数：部分失败时界面里还有旧内容，
+     这时候刷新时间戳会把「数据其实是旧的」掩盖掉，宁可保守地不更新。 */
+  if (!failed) S.loadAt = new Date().toISOString();
   const habits = at(0), ckRes = at(1), health = at(2), acts = at(3),
         books = at(4), notes = at(5), plans = at(6), logs = at(7);
   const checkins = ckRes ? ckRes.rows : null;
@@ -641,11 +644,13 @@ async function toggleCheckin(habitId, day, skipRender) {
     }
     if (!skipRender) render();
   }
+  /* 打卡走 patchCheckinUI 局部刷新，不会触发 render，这里补一次快照刷新 */
+  saveSnapshotSoon();
 }
 
 async function saveHabit(payload, id) {
   if (id != null && id !== '') {
-    const row = await updateRows('habits', id, payload);
+    const row = await patchRow('habits', id, payload, '这个打卡项');
     const i = S.habits.findIndex(h => eqId(h.id, id));
     if (i >= 0) S.habits[i] = Object.assign(S.habits[i], row);
   } else {
@@ -663,13 +668,14 @@ async function saveHabit(payload, id) {
   render();
 }
 
-/* 软删除：保留习惯与其历史打卡，历史完成率才不会因删项而被改写 */
+/* 软删除：保留习惯与其历史打卡，历史完成率才不会因删项而被改写。
+   先确认云端真的改了这一行再改内存，否则「删掉→刷新又回来」。 */
 async function removeHabit(id) {
   const at = new Date().toISOString();
-  const rows = [await updateRows('habits', id, { archived: true, archived_at: at })];
+  const row = await patchRow('habits', id, { archived: true, archived_at: at }, '这个打卡项');
   const h = S.habits.find(x => eqId(x.id, id));
   if (h) { h.archived = true; h.archived_at = at; }
-  else if (rows[0]) S.habits.push(rows[0]);
+  else if (row) S.habits.push(row);
   render();
 }
 
@@ -694,17 +700,23 @@ async function saveBook(payload) {
 /* 软删除：书籍与它的划线共用一个时间戳，恢复时能精确还原这一批 */
 async function removeBook(id) {
   const at = new Date().toISOString();
-  await updateRows('books', id, { deleted_at: at });
-  // 只按 id 逐条更新：避免依赖 SDK 对 eq(col, null) / is() 的支持差异
+  await patchRow('books', id, { deleted_at: at }, '这本书');
+  /* 只按 id 逐条更新：避免依赖 SDK 对 eq(col, null) / is() 的支持差异。
+     单条划线没被确认不拖垮整本删除（书已删，划线本来也不再显示），
+     但没被确认的那条不改内存，避免「界面删了、云端还在」。 */
   const noteIds = S.notes.filter(n => eqId(n.book_id, id) && !n.deleted_at).map(n => n.id);
-  for (const nid of noteIds) await updateRows('notes', nid, { deleted_at: at });
+  const done = {};
+  for (const nid of noteIds) {
+    try { await patchRow('notes', nid, { deleted_at: at }, '这条划线'); done[dbId(nid)] = true; }
+    catch (e) { noteWriteError('removeBookNote', e); }
+  }
   const b = S.books.find(x => eqId(x.id, id));
   if (b) b.deleted_at = at;
-  S.notes.forEach(n => { if (eqId(n.book_id, id) && !n.deleted_at) n.deleted_at = at; });
+  S.notes.forEach(n => { if (done[dbId(n.id)]) n.deleted_at = at; });
   render();
 }
 async function patchBook(id, payload) {
-  const row = await updateRows('books', id, payload);
+  const row = await patchRow('books', id, payload, '这本书');
   const i = S.books.findIndex(b => eqId(b.id, id));
   if (i >= 0) Object.assign(S.books[i], row);
   render();
@@ -729,7 +741,7 @@ async function addNotes(list) {
 }
 async function removeNote(id) {
   const at = new Date().toISOString();
-  await updateRows('notes', id, { deleted_at: at });
+  await patchRow('notes', id, { deleted_at: at }, '这条划线');
   const n = S.notes.find(x => eqId(x.id, id));
   if (n) n.deleted_at = at;
   render();
@@ -742,7 +754,7 @@ async function savePlan(payload) {
 }
 async function removePlan(id) {
   const at = new Date().toISOString();
-  await updateRows('study_plans', id, { deleted_at: at });
+  await patchRow('study_plans', id, { deleted_at: at }, '这个计划');
   const p = S.plans.find(x => eqId(x.id, id));
   if (p) p.deleted_at = at;
   render();
@@ -789,17 +801,20 @@ async function findRowId(table, col, val, len) {
   const hit = (rows || []).find(r => String(r[col]).slice(0, n) === val);
   return hit ? dbId(hit.id) : null;
 }
-/* 同步（COROS / 微信读书）走的通用更新：同样要求云端确认。
-   以前这里吞掉 0 行，同步日志写「成功」而库里其实没变，下次打开还是旧数值。 */
-async function patchById(table, id, payload) {
+/* UPDATE ... select() 返回 0 行，说明云端一行都没改动（被 RLS 过滤、已被别的设备
+   删掉、或这行不属于当前账号）。此时若照样改内存，界面会显示「已删除」，下次加载
+   又把它拉回来 —— 正是「删了、刷新又变回原样」。所以要求必须有确认行，没有就报错。 */
+async function patchRow(table, id, payload, what) {
   const rows = normRows(await q(DB.from(table).update(payload).eq('id', dbId(id)).select()));
   if (!rows.length) {
-    const e = new Error('云端未确认更新 ' + table + '#' + id + '（0 行受影响）');
-    e.writeZero = true;
-    noteWriteError('sync ' + table, e);
+    const e = new Error('云端没有确认这次修改（' + (what || '这条记录') + '可能已被删除，或不属于当前账号），请刷新后重试');
+    e.notConfirmed = true;
     throw e;
   }
   return rows[0];
+}
+async function patchById(table, id, payload) {
+  await patchRow(table, id, payload, '这条记录');
 }
 
 /* 回放离线打卡：目标状态幂等（true=INSERT、false=DELETE），重复写入视为已同步 */
@@ -857,6 +872,9 @@ async function upsertHealth(day, patch) {
     }
   }
   S.health[day] = Object.assign(S.health[day] || { day: day }, clean, id !== null ? { id: String(id) } : {});
+  /* 这一类写入（COROS 同步）不经过 render，调用方若在之后卡住/失败，
+     快照就会停在同步前的样子；由写入方自己负责把快照标脏。 */
+  saveSnapshotSoon();
 }
 
 async function upsertActivity(row) {
@@ -877,6 +895,7 @@ async function upsertActivity(row) {
   if (id !== null) {
     await patchById('activities', id, row);
     if (cur) Object.assign(cur, row);
+    saveSnapshotSoon();                 // 同 upsertHealth：写入方自己负责标脏快照
     return;
   }
   try {
@@ -896,6 +915,7 @@ async function upsertActivity(row) {
     if (hit) { const rid = dbId(hit.id); await patchById('activities', rid, row); S.activities.push(normRow(Object.assign({ id: rid }, row))); }
     else await q(DB.from('activities').update(row).eq('external_id', ext).select());
   }
+  saveSnapshotSoon();
 }
 
 async function kvGet(k) {
@@ -905,7 +925,7 @@ async function kvGet(k) {
 async function kvSet(k, v) {
   const rows = await q(DB.from('app_kv').select('id').eq('k', k).limit(1));
   if (rows && rows[0]) {
-    await updateRows('app_kv', rows[0].id, { v: v, updated_at: new Date().toISOString() });
+    await patchRow('app_kv', rows[0].id, { v: v, updated_at: new Date().toISOString() }, '这个设置项');
   } else {
     await insertRows('app_kv', { k: k, v: v });
   }
@@ -917,22 +937,27 @@ async function kvDel(k) {
 /* ==================== 最近删除与恢复 ==================== */
 async function restoreRow(kind, id) {
   if (kind === 'habit') {
-    await updateRows('habits', id, { archived: false, archived_at: null });
+    await patchRow('habits', id, { archived: false, archived_at: null }, '这个打卡项');
     const h = S.habits.find(x => eqId(x.id, id));
     if (h) { h.archived = false; h.archived_at = null; }
   } else if (kind === 'book') {
     const b = S.books.find(x => eqId(x.id, id));
     const stamp = b ? b.deleted_at : null;
-    await updateRows('books', id, { deleted_at: null });
+    await patchRow('books', id, { deleted_at: null }, '这本书');
     if (b) {
       b.deleted_at = null;
       const ids = S.notes.filter(n => eqId(n.book_id, id) && stamp && n.deleted_at === stamp).map(n => n.id);
-      for (const nid of ids) await updateRows('notes', nid, { deleted_at: null });
-      S.notes.forEach(n => { if (eqId(n.book_id, id) && stamp && n.deleted_at === stamp) n.deleted_at = null; });
+      for (const nid of ids) {
+        try {
+          await patchRow('notes', nid, { deleted_at: null }, '这条划线');
+          const n = S.notes.find(x => eqId(x.id, nid));
+          if (n) n.deleted_at = null;
+        } catch (e) { noteWriteError('restoreBookNote', e); }
+      }
     }
   } else if (kind === 'note' || kind === 'plan') {
     const t = kind === 'note' ? 'notes' : 'study_plans';
-    await updateRows(t, id, { deleted_at: null });
+    await patchRow(t, id, { deleted_at: null }, kind === 'note' ? '这条划线' : '这个计划');
     const row = (kind === 'note' ? S.notes : S.plans).find(x => eqId(x.id, id));
     if (row) row.deleted_at = null;
   }
@@ -1335,34 +1360,48 @@ function dataHealth() {
     deleted: recentDeleted().length, snapshotAt: S.snapshotAt
   };
 }
+/* 快照新鲜度 / 数据不完整提示。
+   只要有一张表没读到、或处于离线模式，界面显示的就是本机缓存 —— 必须一直说出来。
+   以前只在「我的」里一行小字加 6 秒 toast，用户看到的现象是「新增/删除后刷新又变回原样」，
+   却找不到原因。 */
+function snapAgeText() {
+  if (!S.snapshotAt) return '';
+  const mins = Math.floor((Date.now() - new Date(S.snapshotAt).getTime()) / 60000);
+  if (!isFinite(mins) || mins < 1) return '刚刚';
+  if (mins < 60) return mins + ' 分钟前';
+  if (mins < 1440) return Math.floor(mins / 60) + ' 小时前';
+  return Math.floor(mins / 1440) + ' 天前';
+}
 function renderFreshness() {
   const el = $('#fresh-bar'); if (!el) return;
-  el.className = 'fresh-bar';
-  /* 有表没读到时，屏幕上这一份就是上次的缓存。必须当场说明并提供重试，
-     否则用户会以为「刚删的东西又回来了」「刚加的东西丢了」——实际是根本没读到云端。 */
-  if (S.loadWarnings > 0 && !S.offline) {
-    el.hidden = false;
-    el.className = 'fresh-bar warn';
-    el.innerHTML = '<span>' + esc(tableNamesCN(S.loadFailTables)) + ' 没读到 · 显示上次缓存</span>' +
-      '<button class="pill" data-act="reloadall">重新加载</button>';
-    return;
+  const age = snapAgeText();
+  const broken = (S.loadFailed || []).map(t => LOAD_LABELS[t] || t);
+  let msg = '';
+  if (broken.length >= LOAD_TABLES.length) {
+    /* 八张表全没读到 = 整体连不上云端，逐表列名字只会变成一屏噪音 */
+    msg = '暂时读不到云端 · 显示本机缓存' + (age ? '（更新于 ' + age + '）' : '') + ' · 点此重试';
+  } else if (broken.length) {
+    msg = broken.join('、') + ' 未更新 · 当前显示本机缓存' +
+      (age ? '（更新于 ' + age + '）' : '') + ' · 点此重试';
+  } else if (S.offline) {
+    msg = '离线模式 · 显示本机缓存' + (age ? '（更新于 ' + age + '）' : '');
+  } else if (S.snapshotAt) {
+    const mins = Math.floor((Date.now() - new Date(S.snapshotAt).getTime()) / 60000);
+    if (isFinite(mins) && mins >= 60) msg = '数据更新于 ' + age + ' · 重新打开可刷新';
   }
-  if (S.offline || !S.snapshotAt) { el.hidden = true; return; }
-  const mins = Math.floor((Date.now() - new Date(S.snapshotAt).getTime()) / 60000);
-  if (mins < 60 || !isFinite(mins)) { el.hidden = true; return; }
+  if (!msg) { el.hidden = true; return; }
   el.hidden = false;
-  el.textContent = mins < 1440
-    ? '数据更新于 ' + Math.floor(mins / 60) + ' 小时前 · 重新打开可刷新'
-    : '数据更新于 ' + Math.floor(mins / 1440) + ' 天前 · 建议重新同步';
-}
-/* 表名 → 用户能认得的说法（顶部告警与「数据健康」共用） */
-const TABLE_CN = {
-  habits: '打卡项', checkins: '打卡记录', health_daily: '身体数据', activities: '运动记录',
-  books: '书架', notes: '划线', study_plans: '学习计划', study_logs: '学习记录'
-};
-function tableNamesCN(list) {
-  const arr = (list || []).map(t => TABLE_CN[t] || t);
-  return arr.length ? arr.join('、') : '部分数据';
+  el.textContent = msg;
+  el.style.color = broken.length ? 'var(--orange)' : '';
+  /* 有表没读到时整条可点＝立刻重拉一次（下拉刷新在 PWA 里不一定好使，
+     给一个明面上的重试入口） */
+  if (broken.length) {
+    el.setAttribute('data-act', 'reloadall');
+    el.style.cursor = 'pointer';
+  } else {
+    el.removeAttribute('data-act');
+    el.style.cursor = '';
+  }
 }
 /* 顶部「重新加载」：重新从云端拉一遍，并明确回报结果（而不是转一圈什么也不说） */
 async function reloadAll() {
@@ -1371,7 +1410,7 @@ async function reloadAll() {
     await loadAll();
     saveSnapshot();
     render();
-    toast(S.loadWarnings ? '仍没读到：' + tableNamesCN(S.loadFailTables) : '已与云端同步');
+    toast(S.loadWarnings ? '仍没读到：' + (S.loadFailed || []).map(t => LOAD_LABELS[t] || t).join('、') : '已与云端同步');
   } catch (e) {
     render();
     toast('重新加载失败：' + ((e && e.message) || '网络异常'), null, 6000);
@@ -2281,8 +2320,10 @@ function renderMe() {
       (S.offline ? '离线只读' : (S.lastWriteError ? '最近一次失败' : '正常')) + '</span></div>' +
     (S.ownerId ? '<div class="dh-row"><span class="dk">数据账号</span><span class="dv">' +
       esc(S.ownerId.length > 16 ? S.ownerId.slice(0, 8) + '…' + S.ownerId.slice(-4) : S.ownerId) + '</span></div>' : '') +
-    (S.loadWarnings ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">本次没读到：' +
-      esc(tableNamesCN(S.loadFailTables)) + '（显示的是上一次缓存）</div>' : '') +
+    (S.loadWarnings ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">本次有 ' +
+      S.loadWarnings + ' 张表读取失败（' +
+      esc((S.loadFailed || []).map(t => LOAD_LABELS[t] || t).join('、')) +
+      '），这几块显示的是上一次缓存</div>' : '') +
     (S.lastWriteError ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">' +
       esc(S.lastWriteError.at.slice(5, 16).replace('T', ' ')) + ' · ' + esc(S.lastWriteError.act) +
       ' · ' + esc(S.lastWriteError.message) + '</div>' : '') +
@@ -2388,7 +2429,9 @@ function render() {
   }
   syncStickyBars();
   syncStripFade();
-  scheduleSnapshot();
+  /* 每次重绘后（写操作都会走到这里）把界面状态刷进快照，
+     这样即使下次加载失败回退到快照，看到的也是刚写入的结果而不是旧数据。 */
+  saveSnapshotSoon();
 }
 
 function go(view) {
@@ -3128,6 +3171,11 @@ async function refreshAll() {
     saveSnapshot(); render();
     return f;
   } catch (e) {
+    /* 后台刷新失败也要落一次渲染：否则界面停在旧数据上，而「哪块没更新」
+       的提示只在 render 里出现，用户会以为刚才那一眼就是最新状态。 */
+    S.offline = navigator.onLine === false ||
+      /failed to fetch|networkerror|network error|timeout|load failed|aborted/i.test(String((e && e.message) || ''));
+    try { render(); } catch (x) {}
     return { error: e };
   } finally {
     refreshing = false;
@@ -3154,7 +3202,9 @@ async function autoRefreshToday(force) {
 function initAutoRefresh() {
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') autoRefreshToday();
+    else flushSnapshotNow();          // 切走前把防抖中的快照落盘，iOS 可能就此冻结页面
   });
+  window.addEventListener('pagehide', flushSnapshotNow);
   window.addEventListener('focus', autoRefreshToday);
   window.addEventListener('online', function () {
     if (!S.user) return;
@@ -3406,10 +3456,11 @@ window.LifeApp = {
   exportBackup: exportBackup, restoreBackup: restoreBackup, fetchBackupRows: fetchBackupRows,
   askConfirm: askConfirm, renderSkeleton: renderSkeleton,
   clearLocalData: clearLocalData, refreshAll: refreshAll, selectPaged: selectPaged,
-  updateRows: updateRows, removeHabit: removeHabit, saveHabit: saveHabit, reloadAll: reloadAll,
+  patchRow: patchRow, removeHabit: removeHabit, saveHabit: saveHabit, reloadAll: reloadAll,
   syncCorosDaily: syncCorosDaily, corosAutoDoneToday: corosAutoDoneToday,
   snapshotOfOtherUser: function () { return snapMismatch; },
-  readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,
+  readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, saveSnapshotSoon: saveSnapshotSoon,
+  flushSnapshotNow: flushSnapshotNow, installSW: installSW,
   sportKind: sportKind, sportIcon: sportIcon, baselineOf: baselineOf,
   fieldDelta: fieldDelta, sparkSVG: sparkSVG, cmpHTML: cmpHTML, avgMetric: avgMetric,
   weekReview: weekReview, factorInsights: factorInsights, dataHealth: dataHealth,
