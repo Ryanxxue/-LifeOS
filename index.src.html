@@ -446,6 +446,10 @@ html[data-glass="on"] .hchip{background-color:var(--fill-2)}
 
 /* ---------- 个人基线 / 环比（洞察卡已移除） ---------- */
 .fresh-bar{background:var(--fill);color:var(--text-2);font-size:12.5px;line-height:1.5;padding:6px 16px;text-align:center}
+/* 读到旧缓存时的告警条：橘子色、允许换行（要放得下一个「重新加载」按钮） */
+.fresh-bar.warn{background:rgba(255,159,10,.14);color:var(--orange);display:flex;align-items:center;
+  justify-content:center;gap:8px;flex-wrap:wrap;padding:6px 12px}
+.fresh-bar.warn .pill{font-size:12.5px;padding:3px 10px;background:var(--orange);color:#fff}
 .health .hcell{cursor:pointer}
 .health .hcell:active{background:var(--fill)}
 .hdelta{font-size:11px;margin-top:2px;line-height:1.2;color:var(--text-3);white-space:nowrap}

@@ -237,6 +237,26 @@ async function insertRows(table, payload) {
   }
   return rows;
 }
+/* 更新一行并确认云端真的改了。
+   PostgREST 在 RLS 过滤掉目标行（会话失效、行已不存在、owner 不匹配）时会返回
+   200 + 空数组，而不是报错。以前前端拿不到行也照样改内存，于是出现「删了/改了，
+   界面变了，刷新又回到原样」——看起来像只改了本地快照。
+   所以所有业务更新统一走这里：0 行 = 明确失败，绝不静默。 */
+async function updateRows(table, id, payload) {
+  const rows = normRows(await q(DB.from(table).update(payload).eq('id', dbId(id)).select()));
+  if (!rows.length) {
+    const e = new Error('云端没有确认这次修改（0 行受影响）：登录可能已过期，或这条记录已被删除');
+    e.writeZero = true;
+    noteWriteError('update ' + table, e);
+    throw e;
+  }
+  assertOwner(rows[0]);
+  if (S.lastWriteError) {
+    S.lastWriteError = null;
+    try { localStorage.removeItem('lb.lastWriteError'); } catch (x) {}
+  }
+  return rows[0];
+}
 /* 写操作前的守卫：离线只读、会话失效都必须在写入之前明确告知，而不是静默拦掉 */
 let sessionCheckedAt = 0;
 async function writeGuard(act) {
@@ -286,6 +306,7 @@ const S = {
   snapshotAt: null,
   ownerId: null,          // 从云端读回的真实 owner，用于校验写入身份
   loadWarnings: 0,        // 本次加载失败的表数量
+  loadFailTables: [],     // 本次加载失败的表名（用于明确告知是哪部分在显示缓存）
   lastWriteError: null,   // 最近一次写入失败，「我的 → 数据健康」可见
   pending: {},            // 离线打卡队列：'day|habitId' -> 目标状态 true/false
   limitHit: false,        // 是否有表触达加载上限
@@ -382,6 +403,20 @@ function readSnapshot() {
     if (o.owner && me && String(o.owner) !== me) { snapMismatch = true; return null; }
     return o;
   } catch (e) { return null; }
+}
+/* 写完就更新本地快照（防抖）。
+   以前只有 loadAll 之后才存快照：删了/加了东西，界面是对的、云端也对，
+   但 localStorage 里仍是旧的一份；下次打开会先拿旧快照渲染一遍，
+   如果那次加载慢或部分失败，用户看到的就是「删了又回来 / 加了又没了」。
+   离线或本次加载有表没读到时故意不存：那会把旧数据盖上新的时间戳，
+   反而让问题更隐蔽。 */
+let snapTimer = null;
+function scheduleSnapshot() {
+  if (snapTimer) return;
+  snapTimer = setTimeout(function () {
+    snapTimer = null;
+    if (S.user && !S.offline && !S.loadWarnings) saveSnapshot();
+  }, 900);
 }
 function applySnapshot(snap, markOffline) {
   if (!snap || !snap.data) return false;
@@ -481,7 +516,14 @@ async function loadAll() {
   ]);
   const at = i => rs[i].status === 'fulfilled' ? (rs[i].value || null) : null;
   const ckResEarly = at(1);
-  const failed = rs.filter(r => r.status === 'rejected').length + (ckResEarly && ckResEarly.error ? 1 : 0);
+  /* 记下具体哪几张表没读到。只报一个数字，用户没法判断「我的打卡没了」到底是
+     加载失败还是真被删了——这两件事的处置完全不同。 */
+  const LOAD_TABLES = ['habits', 'checkins', 'health_daily', 'activities',
+                       'books', 'notes', 'study_plans', 'study_logs'];
+  S.loadFailTables = rs.map((r, i) =>
+    (r.status === 'rejected' || (i === 1 && ckResEarly && ckResEarly.error)) ? LOAD_TABLES[i] : null
+  ).filter(Boolean);
+  const failed = S.loadFailTables.length;
   if (failed >= rs.length) {
     const firstRej = rs.find(r => r.status === 'rejected');
     throw ((ckResEarly && ckResEarly.error) || (firstRej && firstRej.reason) || new Error('数据加载失败'));
@@ -603,10 +645,9 @@ async function toggleCheckin(habitId, day, skipRender) {
 
 async function saveHabit(payload, id) {
   if (id != null && id !== '') {
-    const rows = normRows(await q(DB.from('habits').update(payload).eq('id', dbId(id)).select()));
-    if (!rows.length) throw new Error('未能更新该打卡项');
+    const row = await updateRows('habits', id, payload);
     const i = S.habits.findIndex(h => eqId(h.id, id));
-    if (i >= 0) S.habits[i] = Object.assign(S.habits[i], rows[0]);
+    if (i >= 0) S.habits[i] = Object.assign(S.habits[i], row);
   } else {
     const rows = await insertRows('habits', payload);
     /* 写后回读：确认这行对当前账号可见，杜绝「提示已添加、刷新就没了」 */
@@ -625,7 +666,7 @@ async function saveHabit(payload, id) {
 /* 软删除：保留习惯与其历史打卡，历史完成率才不会因删项而被改写 */
 async function removeHabit(id) {
   const at = new Date().toISOString();
-  const rows = normRows(await q(DB.from('habits').update({ archived: true, archived_at: at }).eq('id', dbId(id)).select()));
+  const rows = [await updateRows('habits', id, { archived: true, archived_at: at })];
   const h = S.habits.find(x => eqId(x.id, id));
   if (h) { h.archived = true; h.archived_at = at; }
   else if (rows[0]) S.habits.push(rows[0]);
@@ -653,20 +694,19 @@ async function saveBook(payload) {
 /* 软删除：书籍与它的划线共用一个时间戳，恢复时能精确还原这一批 */
 async function removeBook(id) {
   const at = new Date().toISOString();
-  await q(DB.from('books').update({ deleted_at: at }).eq('id', dbId(id)).select());
+  await updateRows('books', id, { deleted_at: at });
   // 只按 id 逐条更新：避免依赖 SDK 对 eq(col, null) / is() 的支持差异
   const noteIds = S.notes.filter(n => eqId(n.book_id, id) && !n.deleted_at).map(n => n.id);
-  for (const nid of noteIds) await q(DB.from('notes').update({ deleted_at: at }).eq('id', dbId(nid)).select());
+  for (const nid of noteIds) await updateRows('notes', nid, { deleted_at: at });
   const b = S.books.find(x => eqId(x.id, id));
   if (b) b.deleted_at = at;
   S.notes.forEach(n => { if (eqId(n.book_id, id) && !n.deleted_at) n.deleted_at = at; });
   render();
 }
 async function patchBook(id, payload) {
-  const rows = normRows(await q(DB.from('books').update(payload).eq('id', dbId(id)).select()));
-  if (!rows.length) throw new Error('未能更新书籍');
+  const row = await updateRows('books', id, payload);
   const i = S.books.findIndex(b => eqId(b.id, id));
-  if (i >= 0) Object.assign(S.books[i], rows[0]);
+  if (i >= 0) Object.assign(S.books[i], row);
   render();
 }
 
@@ -689,7 +729,7 @@ async function addNotes(list) {
 }
 async function removeNote(id) {
   const at = new Date().toISOString();
-  await q(DB.from('notes').update({ deleted_at: at }).eq('id', dbId(id)).select());
+  await updateRows('notes', id, { deleted_at: at });
   const n = S.notes.find(x => eqId(x.id, id));
   if (n) n.deleted_at = at;
   render();
@@ -702,7 +742,7 @@ async function savePlan(payload) {
 }
 async function removePlan(id) {
   const at = new Date().toISOString();
-  await q(DB.from('study_plans').update({ deleted_at: at }).eq('id', dbId(id)).select());
+  await updateRows('study_plans', id, { deleted_at: at });
   const p = S.plans.find(x => eqId(x.id, id));
   if (p) p.deleted_at = at;
   render();
@@ -749,8 +789,17 @@ async function findRowId(table, col, val, len) {
   const hit = (rows || []).find(r => String(r[col]).slice(0, n) === val);
   return hit ? dbId(hit.id) : null;
 }
+/* 同步（COROS / 微信读书）走的通用更新：同样要求云端确认。
+   以前这里吞掉 0 行，同步日志写「成功」而库里其实没变，下次打开还是旧数值。 */
 async function patchById(table, id, payload) {
-  await q(DB.from(table).update(payload).eq('id', id).select());
+  const rows = normRows(await q(DB.from(table).update(payload).eq('id', dbId(id)).select()));
+  if (!rows.length) {
+    const e = new Error('云端未确认更新 ' + table + '#' + id + '（0 行受影响）');
+    e.writeZero = true;
+    noteWriteError('sync ' + table, e);
+    throw e;
+  }
+  return rows[0];
 }
 
 /* 回放离线打卡：目标状态幂等（true=INSERT、false=DELETE），重复写入视为已同步 */
@@ -856,7 +905,7 @@ async function kvGet(k) {
 async function kvSet(k, v) {
   const rows = await q(DB.from('app_kv').select('id').eq('k', k).limit(1));
   if (rows && rows[0]) {
-    await q(DB.from('app_kv').update({ v: v, updated_at: new Date().toISOString() }).eq('id', rows[0].id).select());
+    await updateRows('app_kv', rows[0].id, { v: v, updated_at: new Date().toISOString() });
   } else {
     await insertRows('app_kv', { k: k, v: v });
   }
@@ -868,22 +917,22 @@ async function kvDel(k) {
 /* ==================== 最近删除与恢复 ==================== */
 async function restoreRow(kind, id) {
   if (kind === 'habit') {
-    await q(DB.from('habits').update({ archived: false, archived_at: null }).eq('id', dbId(id)).select());
+    await updateRows('habits', id, { archived: false, archived_at: null });
     const h = S.habits.find(x => eqId(x.id, id));
     if (h) { h.archived = false; h.archived_at = null; }
   } else if (kind === 'book') {
     const b = S.books.find(x => eqId(x.id, id));
     const stamp = b ? b.deleted_at : null;
-    await q(DB.from('books').update({ deleted_at: null }).eq('id', dbId(id)).select());
+    await updateRows('books', id, { deleted_at: null });
     if (b) {
       b.deleted_at = null;
       const ids = S.notes.filter(n => eqId(n.book_id, id) && stamp && n.deleted_at === stamp).map(n => n.id);
-      for (const nid of ids) await q(DB.from('notes').update({ deleted_at: null }).eq('id', dbId(nid)).select());
+      for (const nid of ids) await updateRows('notes', nid, { deleted_at: null });
       S.notes.forEach(n => { if (eqId(n.book_id, id) && stamp && n.deleted_at === stamp) n.deleted_at = null; });
     }
   } else if (kind === 'note' || kind === 'plan') {
     const t = kind === 'note' ? 'notes' : 'study_plans';
-    await q(DB.from(t).update({ deleted_at: null }).eq('id', dbId(id)).select());
+    await updateRows(t, id, { deleted_at: null });
     const row = (kind === 'note' ? S.notes : S.plans).find(x => eqId(x.id, id));
     if (row) row.deleted_at = null;
   }
@@ -1288,6 +1337,16 @@ function dataHealth() {
 }
 function renderFreshness() {
   const el = $('#fresh-bar'); if (!el) return;
+  el.className = 'fresh-bar';
+  /* 有表没读到时，屏幕上这一份就是上次的缓存。必须当场说明并提供重试，
+     否则用户会以为「刚删的东西又回来了」「刚加的东西丢了」——实际是根本没读到云端。 */
+  if (S.loadWarnings > 0 && !S.offline) {
+    el.hidden = false;
+    el.className = 'fresh-bar warn';
+    el.innerHTML = '<span>' + esc(tableNamesCN(S.loadFailTables)) + ' 没读到 · 显示上次缓存</span>' +
+      '<button class="pill" data-act="reloadall">重新加载</button>';
+    return;
+  }
   if (S.offline || !S.snapshotAt) { el.hidden = true; return; }
   const mins = Math.floor((Date.now() - new Date(S.snapshotAt).getTime()) / 60000);
   if (mins < 60 || !isFinite(mins)) { el.hidden = true; return; }
@@ -1295,6 +1354,28 @@ function renderFreshness() {
   el.textContent = mins < 1440
     ? '数据更新于 ' + Math.floor(mins / 60) + ' 小时前 · 重新打开可刷新'
     : '数据更新于 ' + Math.floor(mins / 1440) + ' 天前 · 建议重新同步';
+}
+/* 表名 → 用户能认得的说法（顶部告警与「数据健康」共用） */
+const TABLE_CN = {
+  habits: '打卡项', checkins: '打卡记录', health_daily: '身体数据', activities: '运动记录',
+  books: '书架', notes: '划线', study_plans: '学习计划', study_logs: '学习记录'
+};
+function tableNamesCN(list) {
+  const arr = (list || []).map(t => TABLE_CN[t] || t);
+  return arr.length ? arr.join('、') : '部分数据';
+}
+/* 顶部「重新加载」：重新从云端拉一遍，并明确回报结果（而不是转一圈什么也不说） */
+async function reloadAll() {
+  toast('正在从云端重新读取…');
+  try {
+    await loadAll();
+    saveSnapshot();
+    render();
+    toast(S.loadWarnings ? '仍没读到：' + tableNamesCN(S.loadFailTables) : '已与云端同步');
+  } catch (e) {
+    render();
+    toast('重新加载失败：' + ((e && e.message) || '网络异常'), null, 6000);
+  }
 }
 /* 打卡只更新被点的行与今日环形，不再整页重绘；失败回滚走 toggleCheckin 内的全量 render */
 function patchCheckinUI(habitId, day, actName) {
@@ -2188,8 +2269,8 @@ function renderMe() {
       (S.offline ? '离线只读' : (S.lastWriteError ? '最近一次失败' : '正常')) + '</span></div>' +
     (S.ownerId ? '<div class="dh-row"><span class="dk">数据账号</span><span class="dv">' +
       esc(S.ownerId.length > 16 ? S.ownerId.slice(0, 8) + '…' + S.ownerId.slice(-4) : S.ownerId) + '</span></div>' : '') +
-    (S.loadWarnings ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">本次有 ' +
-      S.loadWarnings + ' 张表读取失败，显示的是上一次缓存</div>' : '') +
+    (S.loadWarnings ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">本次没读到：' +
+      esc(tableNamesCN(S.loadFailTables)) + '（显示的是上一次缓存）</div>' : '') +
     (S.lastWriteError ? '<div class="gfoot" style="margin-top:6px;padding-bottom:4px;color:var(--orange)">' +
       esc(S.lastWriteError.at.slice(5, 16).replace('T', ' ')) + ' · ' + esc(S.lastWriteError.act) +
       ' · ' + esc(S.lastWriteError.message) + '</div>' : '') +
@@ -2295,6 +2376,7 @@ function render() {
   }
   syncStickyBars();
   syncStripFade();
+  scheduleSnapshot();
 }
 
 function go(view) {
@@ -2850,6 +2932,7 @@ document.addEventListener('click', async function (ev) {
       if (window.Coros) await Coros.connect();
       break;
     case 'corosSync': await runCorosSync(); break;
+    case 'reloadall': await reloadAll(); break;
     case 'corosDiag': {
       const w = (window.Coros && typeof Coros.warnings === 'function') ? Coros.warnings() : [];
       const diag = (window.Coros && typeof Coros.diagnostics === 'function') ? await Coros.diagnostics() : null;
@@ -3311,6 +3394,7 @@ window.LifeApp = {
   exportBackup: exportBackup, restoreBackup: restoreBackup, fetchBackupRows: fetchBackupRows,
   askConfirm: askConfirm, renderSkeleton: renderSkeleton,
   clearLocalData: clearLocalData, refreshAll: refreshAll, selectPaged: selectPaged,
+  updateRows: updateRows, removeHabit: removeHabit, saveHabit: saveHabit, reloadAll: reloadAll,
   syncCorosDaily: syncCorosDaily, corosAutoDoneToday: corosAutoDoneToday,
   snapshotOfOtherUser: function () { return snapMismatch; },
   readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, installSW: installSW,

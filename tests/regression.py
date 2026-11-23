@@ -127,6 +127,9 @@ MOCK = r'''
       return out;
     }
     if (query.op === 'update') {
+      /* 模拟 RLS 把目标行过滤掉：PostgREST 会返回 200 + 空数组，且数据不变。
+         前端必须把这当成失败，不能拿「没返回行」当成功继续改内存。 */
+      if (window.__MOCK__ && window.__MOCK__.dropUpdates === t) return [];
       const out = [];
       list.forEach(row => { if (match(row)) { Object.assign(row, query.payload); out.push(clone(row)); } });
       return out;
@@ -171,7 +174,7 @@ MOCK = r'''
   window.__STORE__ = store;
   window.__dayAt__ = dayAt;
   /* 故障注入：模拟「云端把写入落到匿名身份」与「单张表查询失败」 */
-  window.__MOCK__ = { forceOwner: null, failTable: null, hideLastInserted: false, lastInsertId: null,
+  window.__MOCK__ = { forceOwner: null, failTable: null, dropUpdates: null, hideLastInserted: false, lastInsertId: null,
     queries: [] };
 })();
 '''
@@ -523,7 +526,46 @@ TEST = r'''
     ok('加载：单表失败不进入离线只读且保留缓存数据',
        !loadThrew && !S.offline && S.loadWarnings === 1 && S.books.length === booksBefore,
        'warnings=' + S.loadWarnings + ' books=' + S.books.length);
+    /* 屏幕上这份是上次缓存时必须当场说明：以前只藏在「我的 → 数据健康」，
+       用户会以为「刚删的又回来了」「刚加的丢了」 */
+    window.LifeApp.render();
+    const fbar = q1('#fresh-bar');
+    ok('加载：部分表失败时顶部直接告警并可一键重新加载',
+       !!fbar && !fbar.hidden && fbar.classList.contains('warn') &&
+       /没读到/.test(fbar.textContent) && /上次缓存/.test(fbar.textContent) &&
+       /书架/.test(fbar.textContent) && !!q1('#fresh-bar [data-act="reloadall"]'),
+       'bar=' + (fbar ? fbar.textContent.trim() : 'null'));
     window.__MOCK__.failTable = null;
+
+    /* --- 写入确认：云端返回 0 行（被 RLS 过滤）时绝不允许静默成功 --- */
+    window.LifeApp.loadAll(); await tick();
+    const hSnap = JSON.stringify(S.habits.find(h => String(h.id) === '1'));
+    window.__MOCK__.dropUpdates = 'habits';
+    let rmErr = null;
+    try { await window.LifeApp.removeHabit(1); } catch (e) { rmErr = e; }
+    const hSnap2 = JSON.stringify(S.habits.find(h => String(h.id) === '1'));
+    ok('写入：云端 0 行确认时删除明确失败、且不改内存（不再「删了刷新又回来」）',
+       !!rmErr && /0 行受影响/.test(rmErr.message) && hSnap === hSnap2,
+       'err=' + (rmErr && rmErr.message) + ' changed=' + (hSnap !== hSnap2));
+    /* 恢复云端确认后，同一个操作应当真正生效 */
+    window.__MOCK__.dropUpdates = null;
+    let rmOk = false;
+    try { await window.LifeApp.removeHabit(1); rmOk = true; } catch (e) {}
+    const hAfterRm = S.habits.find(h => String(h.id) === '1');
+    ok('写入：恢复确认后删除真正落库并更新内存',
+       rmOk && !!hAfterRm && hAfterRm.archived === true,
+       'archived=' + (hAfterRm && hAfterRm.archived));
+    delete window.__MOCK__.dropUpdates;
+
+    /* 写操作后必须把本地快照一起更新：否则下次打开会先渲染旧快照，
+       看起来就是「删了又回来 / 加了又没了」 */
+    await sleep(1200);
+    const snapNow = JSON.parse(localStorage.getItem('lb.snapshot.v1') || 'null');
+    const snapHabit = snapNow && snapNow.data && snapNow.data.habits
+      ? snapNow.data.habits.find(h => String(h.id) === '1') : null;
+    ok('写入：操作后本地快照同步更新（重新打开不会先显示旧数据）',
+       !!snapHabit && snapHabit.archived === true,
+       'snap=' + (snapHabit ? snapHabit.archived : 'null'));
 
     goMe(); await tick();
     ok('诊断：我的页显示云端写入状态与数据账号',

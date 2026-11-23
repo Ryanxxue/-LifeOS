@@ -1,6 +1,6 @@
 /* 生活记录面板 service worker —— 由 build.py 生成，请勿手改 */
 /* 注册 URL 上的 sharecode 会随 self.location 带进来，因此无需把访问码写死。 */
-const VERSION = 'bed3e39e16';
+const VERSION = 'd3ca9d8bb3';
 const CACHE = 'life-board-' + VERSION;
 const SC = new URL(self.location.href).searchParams.get('sharecode') || '';
 const SHELL = new URL('./', self.location).href + (SC ? '?sharecode=' + encodeURIComponent(SC) : '');
