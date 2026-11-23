@@ -284,6 +284,7 @@ const S = {
   loading: false,
   offline: false,
   snapshotAt: null,
+  loadAt: null,           // 上次「完整」从云端取数成功的时刻（快照时间戳取它，不取写入时刻）
   ownerId: null,          // 从云端读回的真实 owner，用于校验写入身份
   loadWarnings: 0,        // 本次加载失败的表数量
   loadFailed: [],         // 本次读取失败的表名（界面上要说清是哪块没更新）
@@ -361,7 +362,7 @@ function clearLocalData() {
       if (k.indexOf('lb.draft.') === 0) localStorage.removeItem(k);
     });
   } catch (e) {}
-  S.pending = {}; S.snapshotAt = null; S.lastWriteError = null; S.ownerId = null;
+  S.pending = {}; S.snapshotAt = null; S.loadAt = null; S.lastWriteError = null; S.ownerId = null;
   S.habits = []; S.checkins = {}; S.health = {}; S.activities = [];
   S.books = []; S.notes = []; S.plans = []; S.logs = [];
 }
@@ -369,7 +370,10 @@ function saveSnapshot() {
   try {
     const data = {};
     SNAP_FIELDS.forEach(function (k) { data[k] = S[k]; });
-    const at = new Date().toISOString();
+    /* at 记的是「数据从云端取回的时刻」，不是「这次写盘的时刻」。
+       否则写一次内容就把时间戳刷成现在，界面上的「数据更新于 X 小时前」
+       会永远显示不出来，用户就失去判断「看到的是不是旧数据」的唯一线索。 */
+    const at = S.loadAt || S.snapshotAt || new Date().toISOString();
     localStorage.setItem(SNAP_KEY, JSON.stringify({ at: at, data: data, owner: userId() }));
     S.snapshotAt = at;
   } catch (e) {}
@@ -387,6 +391,13 @@ function saveSnapshotSoon() {
     saveSnapshot();
   }, 400);
 }
+/* 页面被系统回收（iOS 切走即冻结、再回来可能是重开）时，上面 400ms 的防抖
+   没落盘就等于没保存。隐藏/卸载前必须立刻写一次，否则「刚删的又回来」。 */
+function flushSnapshotNow() {
+  if (snapSoonTimer) { clearTimeout(snapSoonTimer); snapSoonTimer = null; }
+  if (!S.user || !S.snapshotAt) return;
+  saveSnapshot();
+}
 function readSnapshot() {
   try {
     const o = JSON.parse(localStorage.getItem(SNAP_KEY) || 'null');
@@ -401,6 +412,10 @@ function applySnapshot(snap, markOffline) {
   if (!snap || !snap.data) return false;
   SNAP_FIELDS.forEach(function (k) { if (snap.data[k] !== undefined) S[k] = snap.data[k]; });
   S.snapshotAt = snap.at;
+  S.loadAt = snap.at;
+  /* 快照是按账号隔离存的，可以直接把它当作「当前账号应为谁」：
+     加载失败时也能继续用 owner 校验拦截写到别人的行（否则只能等下次加载才知道）。 */
+  if (snap.owner && !S.ownerId) S.ownerId = String(snap.owner);
   if (markOffline !== false) S.offline = true;
   applyPending();
   bump();
@@ -514,6 +529,9 @@ async function loadAll() {
     throw ((ckResEarly && ckResEarly.error) || (firstRej && firstRej.reason) || new Error('数据加载失败'));
   }
   S.loadWarnings = failed;
+  /* 只有「八张表全部读到了」才算一次可信的取数：部分失败时界面里还有旧内容，
+     这时候刷新时间戳会把「数据其实是旧的」掩盖掉，宁可保守地不更新。 */
+  if (!failed) S.loadAt = new Date().toISOString();
   const habits = at(0), ckRes = at(1), health = at(2), acts = at(3),
         books = at(4), notes = at(5), plans = at(6), logs = at(7);
   const checkins = ckRes ? ckRes.rows : null;
@@ -651,13 +669,14 @@ async function saveHabit(payload, id) {
   render();
 }
 
-/* 软删除：保留习惯与其历史打卡，历史完成率才不会因删项而被改写 */
+/* 软删除：保留习惯与其历史打卡，历史完成率才不会因删项而被改写。
+   先确认云端真的改了这一行再改内存，否则「删掉→刷新又回来」。 */
 async function removeHabit(id) {
   const at = new Date().toISOString();
-  const rows = normRows(await q(DB.from('habits').update({ archived: true, archived_at: at }).eq('id', dbId(id)).select()));
+  const row = await patchRow('habits', id, { archived: true, archived_at: at }, '这个打卡项');
   const h = S.habits.find(x => eqId(x.id, id));
   if (h) { h.archived = true; h.archived_at = at; }
-  else if (rows[0]) S.habits.push(rows[0]);
+  else if (row) S.habits.push(row);
   render();
 }
 
@@ -682,13 +701,19 @@ async function saveBook(payload) {
 /* 软删除：书籍与它的划线共用一个时间戳，恢复时能精确还原这一批 */
 async function removeBook(id) {
   const at = new Date().toISOString();
-  await q(DB.from('books').update({ deleted_at: at }).eq('id', dbId(id)).select());
-  // 只按 id 逐条更新：避免依赖 SDK 对 eq(col, null) / is() 的支持差异
+  await patchRow('books', id, { deleted_at: at }, '这本书');
+  /* 只按 id 逐条更新：避免依赖 SDK 对 eq(col, null) / is() 的支持差异。
+     单条划线没被确认不拖垮整本删除（书已删，划线本来也不再显示），
+     但没被确认的那条不改内存，避免「界面删了、云端还在」。 */
   const noteIds = S.notes.filter(n => eqId(n.book_id, id) && !n.deleted_at).map(n => n.id);
-  for (const nid of noteIds) await q(DB.from('notes').update({ deleted_at: at }).eq('id', dbId(nid)).select());
+  const done = {};
+  for (const nid of noteIds) {
+    try { await patchRow('notes', nid, { deleted_at: at }, '这条划线'); done[dbId(nid)] = true; }
+    catch (e) { noteWriteError('removeBookNote', e); }
+  }
   const b = S.books.find(x => eqId(x.id, id));
   if (b) b.deleted_at = at;
-  S.notes.forEach(n => { if (eqId(n.book_id, id) && !n.deleted_at) n.deleted_at = at; });
+  S.notes.forEach(n => { if (done[dbId(n.id)]) n.deleted_at = at; });
   render();
 }
 async function patchBook(id, payload) {
@@ -718,7 +743,7 @@ async function addNotes(list) {
 }
 async function removeNote(id) {
   const at = new Date().toISOString();
-  await q(DB.from('notes').update({ deleted_at: at }).eq('id', dbId(id)).select());
+  await patchRow('notes', id, { deleted_at: at }, '这条划线');
   const n = S.notes.find(x => eqId(x.id, id));
   if (n) n.deleted_at = at;
   render();
@@ -731,7 +756,7 @@ async function savePlan(payload) {
 }
 async function removePlan(id) {
   const at = new Date().toISOString();
-  await q(DB.from('study_plans').update({ deleted_at: at }).eq('id', dbId(id)).select());
+  await patchRow('study_plans', id, { deleted_at: at }, '这个计划');
   const p = S.plans.find(x => eqId(x.id, id));
   if (p) p.deleted_at = at;
   render();
@@ -778,8 +803,20 @@ async function findRowId(table, col, val, len) {
   const hit = (rows || []).find(r => String(r[col]).slice(0, n) === val);
   return hit ? dbId(hit.id) : null;
 }
+/* UPDATE ... select() 返回 0 行，说明云端一行都没改动（被 RLS 过滤、已被别的设备
+   删掉、或这行不属于当前账号）。此时若照样改内存，界面会显示「已删除」，下次加载
+   又把它拉回来 —— 正是「删了、刷新又变回原样」。所以要求必须有确认行，没有就报错。 */
+async function patchRow(table, id, payload, what) {
+  const rows = normRows(await q(DB.from(table).update(payload).eq('id', dbId(id)).select()));
+  if (!rows.length) {
+    const e = new Error('云端没有确认这次修改（' + (what || '这条记录') + '可能已被删除，或不属于当前账号），请刷新后重试');
+    e.notConfirmed = true;
+    throw e;
+  }
+  return rows[0];
+}
 async function patchById(table, id, payload) {
-  await q(DB.from(table).update(payload).eq('id', id).select());
+  await patchRow(table, id, payload, '这条记录');
 }
 
 /* 回放离线打卡：目标状态幂等（true=INSERT、false=DELETE），重复写入视为已同步 */
@@ -837,6 +874,9 @@ async function upsertHealth(day, patch) {
     }
   }
   S.health[day] = Object.assign(S.health[day] || { day: day }, clean, id !== null ? { id: String(id) } : {});
+  /* 这一类写入（COROS 同步）不经过 render，调用方若在之后卡住/失败，
+     快照就会停在同步前的样子；由写入方自己负责把快照标脏。 */
+  saveSnapshotSoon();
 }
 
 async function upsertActivity(row) {
@@ -857,6 +897,7 @@ async function upsertActivity(row) {
   if (id !== null) {
     await patchById('activities', id, row);
     if (cur) Object.assign(cur, row);
+    saveSnapshotSoon();                 // 同 upsertHealth：写入方自己负责标脏快照
     return;
   }
   try {
@@ -876,6 +917,7 @@ async function upsertActivity(row) {
     if (hit) { const rid = dbId(hit.id); await patchById('activities', rid, row); S.activities.push(normRow(Object.assign({ id: rid }, row))); }
     else await q(DB.from('activities').update(row).eq('external_id', ext).select());
   }
+  saveSnapshotSoon();
 }
 
 async function kvGet(k) {
@@ -897,22 +939,27 @@ async function kvDel(k) {
 /* ==================== 最近删除与恢复 ==================== */
 async function restoreRow(kind, id) {
   if (kind === 'habit') {
-    await q(DB.from('habits').update({ archived: false, archived_at: null }).eq('id', dbId(id)).select());
+    await patchRow('habits', id, { archived: false, archived_at: null }, '这个打卡项');
     const h = S.habits.find(x => eqId(x.id, id));
     if (h) { h.archived = false; h.archived_at = null; }
   } else if (kind === 'book') {
     const b = S.books.find(x => eqId(x.id, id));
     const stamp = b ? b.deleted_at : null;
-    await q(DB.from('books').update({ deleted_at: null }).eq('id', dbId(id)).select());
+    await patchRow('books', id, { deleted_at: null }, '这本书');
     if (b) {
       b.deleted_at = null;
       const ids = S.notes.filter(n => eqId(n.book_id, id) && stamp && n.deleted_at === stamp).map(n => n.id);
-      for (const nid of ids) await q(DB.from('notes').update({ deleted_at: null }).eq('id', dbId(nid)).select());
-      S.notes.forEach(n => { if (eqId(n.book_id, id) && stamp && n.deleted_at === stamp) n.deleted_at = null; });
+      for (const nid of ids) {
+        try {
+          await patchRow('notes', nid, { deleted_at: null }, '这条划线');
+          const n = S.notes.find(x => eqId(x.id, nid));
+          if (n) n.deleted_at = null;
+        } catch (e) { noteWriteError('restoreBookNote', e); }
+      }
     }
   } else if (kind === 'note' || kind === 'plan') {
     const t = kind === 'note' ? 'notes' : 'study_plans';
-    await q(DB.from(t).update({ deleted_at: null }).eq('id', dbId(id)).select());
+    await patchRow(t, id, { deleted_at: null }, kind === 'note' ? '这条划线' : '这个计划');
     const row = (kind === 'note' ? S.notes : S.plans).find(x => eqId(x.id, id));
     if (row) row.deleted_at = null;
   }
@@ -1332,7 +1379,10 @@ function renderFreshness() {
   const age = snapAgeText();
   const broken = (S.loadFailed || []).map(t => LOAD_LABELS[t] || t);
   let msg = '';
-  if (broken.length) {
+  if (broken.length >= LOAD_TABLES.length) {
+    /* 八张表全没读到 = 整体连不上云端，逐表列名字只会变成一屏噪音 */
+    msg = '暂时读不到云端 · 显示本机缓存' + (age ? '（更新于 ' + age + '）' : '') + ' · 下拉刷新重试';
+  } else if (broken.length) {
     msg = broken.join('、') + ' 未更新 · 当前显示本机缓存' +
       (age ? '（更新于 ' + age + '）' : '') + ' · 下拉刷新重试';
   } else if (S.offline) {
@@ -3026,6 +3076,11 @@ async function refreshAll() {
     saveSnapshot(); render();
     return f;
   } catch (e) {
+    /* 后台刷新失败也要落一次渲染：否则界面停在旧数据上，而「哪块没更新」
+       的提示只在 render 里出现，用户会以为刚才那一眼就是最新状态。 */
+    S.offline = navigator.onLine === false ||
+      /failed to fetch|networkerror|network error|timeout|load failed|aborted/i.test(String((e && e.message) || ''));
+    try { render(); } catch (x) {}
     return { error: e };
   } finally {
     refreshing = false;
@@ -3052,7 +3107,9 @@ async function autoRefreshToday(force) {
 function initAutoRefresh() {
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') autoRefreshToday();
+    else flushSnapshotNow();          // 切走前把防抖中的快照落盘，iOS 可能就此冻结页面
   });
+  window.addEventListener('pagehide', flushSnapshotNow);
   window.addEventListener('focus', autoRefreshToday);
   window.addEventListener('online', function () {
     if (!S.user) return;
@@ -3306,7 +3363,8 @@ window.LifeApp = {
   clearLocalData: clearLocalData, refreshAll: refreshAll, selectPaged: selectPaged,
   syncCorosDaily: syncCorosDaily, corosAutoDoneToday: corosAutoDoneToday,
   snapshotOfOtherUser: function () { return snapMismatch; },
-  readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, saveSnapshotSoon: saveSnapshotSoon, installSW: installSW,
+  readSnapshot: readSnapshot, saveSnapshot: saveSnapshot, saveSnapshotSoon: saveSnapshotSoon,
+  flushSnapshotNow: flushSnapshotNow, installSW: installSW,
   sportKind: sportKind, sportIcon: sportIcon, baselineOf: baselineOf,
   fieldDelta: fieldDelta, sparkSVG: sparkSVG, cmpHTML: cmpHTML, avgMetric: avgMetric,
   weekReview: weekReview, factorInsights: factorInsights, dataHealth: dataHealth,

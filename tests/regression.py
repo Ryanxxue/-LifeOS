@@ -204,6 +204,8 @@ MOCK = r'''
       return out;
     }
     if (query.op === 'update') {
+      // 故障注入：模拟这一行在云端已经不存在（别的设备删了 / 被 RLS 过滤）
+      if (window.__MOCK__ && window.__MOCK__.updateNoMatch === t) return [];
       const out = [];
       list.forEach(row => { if (match(row)) { Object.assign(row, query.payload); out.push(clone(row)); } });
       return out;
@@ -249,7 +251,7 @@ MOCK = r'''
   window.__dayAt__ = dayAt;
   /* 故障注入：模拟「云端把写入落到匿名身份」与「单张表查询失败」 */
   window.__MOCK__ = { forceOwner: null, failTable: null, hideLastInserted: false, lastInsertId: null,
-    queries: [] };
+    updateNoMatch: null, queries: [] };
 })();
 '''
 
@@ -627,6 +629,102 @@ TEST = r'''
     ok('加载：恢复后不再显示未更新提示',
        q1('#fresh-bar').hidden || !/未更新/.test(q1('#fresh-bar').textContent),
        'bar=' + q1('#fresh-bar').textContent);
+
+    /* --- 同样的「写后必须能从前端复原」检查，逐类数据各验一遍 --- */
+    /* 书架：新增一本，写成功后 books 读取失败，界面不能退回旧书架 */
+    goTab('library'); await tick();
+    const addBookBtn = q1('[data-act="addbook"]');
+    if (addBookBtn) addBookBtn.click();
+    await tick();
+    const manualBtn = q1('#sheet [data-act="manualbook"]');
+    if (manualBtn) manualBtn.click();
+    await tick();
+    const tInput = q1('#mb-title');
+    if (tInput) { tInput.value = '回归书架新书'; tInput.dispatchEvent(new Event('input', { bubbles: true })); }
+    const sBookBtn = q1('[data-act="savemanualbook"]');
+    if (sBookBtn) sBookBtn.click();
+    await tick(); await tick();
+    ok('写入：新增书籍写入云端并留在内存',
+       store.books.some(b => b.title === '回归书架新书') && S.books.some(b => b.title === '回归书架新书'),
+       'store=' + store.books.length + ' S=' + S.books.length);
+
+    await new Promise(r => setTimeout(r, 700));
+    const snapBook = window.LifeApp.readSnapshot();
+    ok('写入：新增书籍写成功后本机快照同步更新',
+       !!snapBook && (snapBook.data.books || []).some(b => b.title === '回归书架新书'),
+       'snapBooks=' + (snapBook ? (snapBook.data.books || []).length : 'null'));
+
+    window.__MOCK__.failTable = 'books';
+    await window.LifeApp.loadAll();
+    window.LifeApp.render(); await tick();
+    ok('加载：书架读取失败时提示指名「书架」且仍显示本机缓存',
+       !q1('#fresh-bar').hidden && /书架/.test(q1('#fresh-bar').textContent) &&
+       S.books.some(b => b.title === '回归书架新书'),
+       'bar=' + q1('#fresh-bar').textContent);
+    window.__MOCK__.failTable = null;
+
+    /* 身体数据：由 COROS 同步写入，同样必须落到本机快照 */
+    const healthDay = dayAt(0);
+    await window.LifeApp.upsertHealth(healthDay, { sleep_total: 7.25 });
+    window.LifeApp.render();
+    await new Promise(r => setTimeout(r, 700));
+    const snapHealth = window.LifeApp.readSnapshot();
+    ok('写入：身体数据写成功后本机快照同步更新',
+       !!snapHealth && !!snapHealth.data.health[healthDay] &&
+       Number(snapHealth.data.health[healthDay].sleep_total) === 7.25,
+       'health=' + JSON.stringify(snapHealth && snapHealth.data.health[healthDay]));
+
+    window.__MOCK__.failTable = 'health_daily';
+    await window.LifeApp.loadAll();
+    window.LifeApp.render(); await tick();
+    ok('加载：身体数据读取失败时提示指名「身体数据」',
+       /身体数据/.test(q1('#fresh-bar').textContent) && S.health[healthDay] &&
+       Number(S.health[healthDay].sleep_total) === 7.25,
+       'bar=' + q1('#fresh-bar').textContent);
+    window.__MOCK__.failTable = null;
+
+    /* 快照时间戳是「数据取自云端的时刻」，不能被一次写入刷新成现在，
+       否则「数据更新于 X 小时前」永远显示不出来 */
+    S.loadAt = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    window.LifeApp.saveSnapshot();
+    S.loadAt = null;      // 写入触发的保存不应改动它
+    const snapAge = window.LifeApp.readSnapshot();
+    const ageHours = Math.round((Date.now() - new Date(snapAge.at).getTime()) / 3600000);
+    ok('快照：时间戳记的是取数时刻，写入不会把它刷成现在', ageHours === 3, 'age=' + ageHours + 'h');
+    await window.LifeApp.loadAll();      // 恢复真实取数时间
+    S.loadAt = new Date().toISOString();
+
+    /* 删除必须有云端确认：UPDATE 一行都没改到（已被别的设备删掉 / 被 RLS 过滤）时，
+       不能把内存标成已删除，否则界面显示“删了”、下次加载又拉回来 */
+    window.LifeApp.go('today'); await tick();
+    const etBtn = q1('[data-act="edittoggle"]');
+    if (etBtn) etBtn.click();
+    await tick();
+    const victim = S.habits.find(h => !h.archived);
+    window.__MOCK__.updateNoMatch = 'habits';
+    const minusBtn = victim ? q1('[data-act="delhabit"][data-id="' + victim.id + '"]') : null;
+    if (minusBtn) minusBtn.click();
+    await tick();
+    const aok = q1('#a-ok');
+    if (aok) aok.click();
+    await tick(); await tick();
+    ok('删除：云端没确认时拒绝把内存标成已删除',
+       /删除失败/.test(q1('#toast').textContent) &&
+       !!S.habits.find(h => h.id === victim.id && !h.archived) &&
+       !!store.habits.find(h => String(h.id) === String(victim.id) && !h.archived),
+       'toast=' + q1('#toast').textContent);
+    window.__MOCK__.updateNoMatch = null;
+    S.editing = false; window.LifeApp.render();
+
+    /* 清掉本节造的数据，后面的「最近删除 / 导入 / 今日身体数据」用例依赖原始条数 */
+    const bi = store.books.findIndex(b => b.title === '回归书架新书');
+    if (bi >= 0) store.books.splice(bi, 1);
+    S.books = S.books.filter(b => b.title !== '回归书架新书');
+    const hi = store.health_daily.findIndex(r => String(r.day).slice(0, 10) === healthDay);
+    if (hi >= 0) store.health_daily.splice(hi, 1);
+    delete S.health[healthDay];
+    window.LifeApp.saveSnapshot();
+    window.LifeApp.render();
 
     goMe(); await tick();
     ok('诊断：我的页显示云端写入状态与数据账号',
