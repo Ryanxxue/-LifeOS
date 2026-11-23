@@ -72,9 +72,31 @@ python3 -m http.server 8000
 
 ### 发布
 
-产物已经在仓库里，所以发布不需要构建步骤：把仓库根目录作为静态站点发布即可
-（WorkBuddy 的「发布为应用」）。发布后地址形如 `https://<app-id>.app.workbuddy.host`，
-首次打开必须带分享码，页面会把它存进本机并在后续导航里一直带上。
+产物已经在仓库里，所以发布不需要构建步骤，但**发布前要先确认产物与源码一致**：
+
+```bash
+python3 build.py --check     # 报"与源码不一致"就先 python3 build.py，再连同产物一起提交
+```
+
+把仓库根目录作为静态站点发布即可（WorkBuddy 的「发布为应用」）。发布后地址形如
+`https://<app-id>.app.workbuddy.host`，首次打开必须带分享码，页面会把它存进本机并在后续导航里一直带上。
+
+三条硬约束，都是踩过的：
+
+1. **只能在首次发布的那台机器 / 那个会话里发布。** 发布目标由"本地目录 → app"的绑定记录决定，
+   这份记录跟着机器走（`.<appId>.genie`、`.workbuddy/applications.yaml`）。换一台机器发布会
+   **新建一个 app**，域名从 `life-board-97391` 变成别的，而云端按 Origin 精确校验：
+
+   ```
+   Origin: <新域名> → 403 access_denied / the request origin is not allowed for this client
+   Origin: <旧域名> → 200
+   ```
+
+   新域名既读不到旧库、也登录不了（`redirectUri` 还写死指向旧域名），COROS 授权同样会断。
+   换句话说，**换机器发布 = 换一套空数据和一套新链接**，不是"更新线上"。
+2. **发布前把 `tests/.probe_state.json` 移出目录。** 发布是把整个目录上传，这个文件里是
+   access/refresh token，会随静态站点变成公网可读。
+3. **发布后自检**：拉一次首页确认构建号是本次的，再用旧 Origin 探一次数据接口确认返回 200。
 
 ## 数据库
 
